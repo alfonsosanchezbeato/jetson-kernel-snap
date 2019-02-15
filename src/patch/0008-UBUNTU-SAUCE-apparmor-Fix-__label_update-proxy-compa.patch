@@ -1,0 +1,35 @@
+From 6ba2b044433b46c0382e4f6b9bbe03f9e0fdfb5e Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 23 Aug 2016 02:05:41 -0700
+Subject: [PATCH 08/36] UBUNTU: SAUCE: apparmor: Fix __label_update proxy
+ comparison test
+
+The comparing the proxy pointer, not the address of the labels proxy pointer.
+
+BugLink: http://bugs.launchpad.net/bugs/1615878
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Tim Gardner <tim.gardner@canonical.com>
+Signed-off-by: Kamal Mostafa <kamal@canonical.com>
+(cherry picked from commit d81601d71a6290f7d2577a25f56218450aeda575)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/label.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 21c9d6f112b2..c453fc815cb3 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1993,7 +1993,7 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 	write_lock_irqsave(&ls->lock, flags);
+ 	label_for_each(i, label, p) {
+ 		new->vec[i.i] = aa_get_newest_profile(p);
+-		if (&new->vec[i.i]->label.proxy != &p->label.proxy)
++		if (new->vec[i.i]->label.proxy != p->label.proxy)
+ 			invcount++;
+ 	}
+ 
+-- 
+2.17.1
+

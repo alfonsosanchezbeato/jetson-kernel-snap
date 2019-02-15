@@ -1,0 +1,26 @@
+From 41f745b953f3f16095edf0d36c6dbc9e54a0b70d Mon Sep 17 00:00:00 2001
+From: Paolo Pisati <paolo.pisati@canonical.com>
+Date: Wed, 13 Jul 2016 14:58:06 +0200
+Subject: [PATCH 34/36] snapcraft.yaml: remove unnecessary fw files
+
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ snapcraft.yaml | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/snapcraft.yaml b/snapcraft.yaml
+index a09010766e58..27b12fd14240 100644
+--- a/snapcraft.yaml
++++ b/snapcraft.yaml
+@@ -12,8 +12,4 @@ parts:
+     kdefconfig: [x86_64_defconfig, snappy/generic.config, snappy/security.config, snappy/systemd.config, snappy/snappy.config, snappy/containers.config]
+     kconfigs:
+       - CONFIG_LOCALVERSION="-stable-4.4.y"
+-    kernel-initrd-firmware:
+-      - lib/firmware/e100/d101m_ucode.bin
+-      - lib/firmware/e100/d101s_ucode.bin
+-      - lib/firmware/e100/d102e_ucode.bin
+     kernel-image-target: bzImage
+-- 
+2.17.1
+

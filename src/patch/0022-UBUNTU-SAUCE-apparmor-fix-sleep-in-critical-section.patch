@@ -1,0 +1,80 @@
+From 703383f98ea53e58b837d3fd3514778182bad189 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 19 Oct 2016 08:17:20 +0200
+Subject: [PATCH 22/36] UBUNTU: SAUCE: apparmor: fix sleep in critical section
+
+path_put() call dput() which might sleep on some paths. When it does
+sleep from these code paths, the per cpu work buffer may get reused
+overwriting the data that was just placed in the buffer.
+
+This causes the following mediation to fail as the work buffer no
+longer has valid data for the current operation.
+
+BugLink: http://bugs.launchpad.net/bugs/1634753
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Acked-by: Andy Whitcroft <andy.whitcroft@canonical.com>
+Signed-off-by: Stefan Bader <stefan.bader@canonical.com>
+(cherry picked from commit 63f6655e74fed75e5007bc8aa6447bcd93327036)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/mount.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index b380e32a6077..ee07f7650b01 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -405,7 +405,6 @@ int aa_bind_mount(struct aa_label *label, struct path *path,
+ 						   &old_path),
+ 			     old_buffer, &old_name, &info,
+ 			     labels_profile(label)->disconnected);
+-	path_put(&old_path);
+ 	if (error)
+ 		goto error;
+ 
+@@ -415,6 +414,7 @@ int aa_bind_mount(struct aa_label *label, struct path *path,
+ 
+ out:
+ 	put_buffers(buffer, old_buffer);
++	path_put(&old_path);
+ 
+ 	return error;
+ 
+@@ -494,7 +494,6 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 						   &old_path),
+ 			     old_buffer, &old_name, &info,
+ 			     labels_profile(label)->disconnected);
+-	path_put(&old_path);
+ 	if (error)
+ 		goto error;
+ 
+@@ -504,6 +503,7 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 
+ out:
+ 	put_buffers(buffer, old_buffer);
++	path_put(&old_path);
+ 
+ 	return error;
+ 
+@@ -557,7 +557,6 @@ int aa_new_mount(struct aa_label *label, const char *orig_dev_name,
+ 						&dev_path),
+ 				     dev_buffer, &dev_name, &info,
+ 				     labels_profile(label)->disconnected);
+-		path_put(&dev_path);
+ 		if (error)
+ 			goto error;
+ 	}
+@@ -574,6 +573,8 @@ int aa_new_mount(struct aa_label *label, const char *orig_dev_name,
+ 
+ cleanup:
+ 	put_buffers(buffer, dev_buffer);
++	if (requires_dev)
++		path_put(&dev_path);
+ 
+ 	return error;
+ 
+-- 
+2.17.1
+

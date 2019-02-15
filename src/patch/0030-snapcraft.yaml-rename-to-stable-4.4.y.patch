@@ -1,0 +1,39 @@
+From 3a91175612535463fe9623687321b5cadde5f7ed Mon Sep 17 00:00:00 2001
+From: Paolo Pisati <paolo.pisati@canonical.com>
+Date: Wed, 29 Jun 2016 13:05:14 +0200
+Subject: [PATCH 30/36] snapcraft.yaml: rename to -stable-4.4.y
+
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ snapcraft.yaml | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/snapcraft.yaml b/snapcraft.yaml
+index 7e586335f5b5..0666fdad91ed 100644
+--- a/snapcraft.yaml
++++ b/snapcraft.yaml
+@@ -1,5 +1,5 @@
+-name: snappyv318
+-version: 3.18.0
++name: snappyv44
++version: 4.4.0
+ summary: A generic amd64 kernel built from source
+ description: This is a generic kernel for amd64 / kvm built using x86_64_defconfig plus the minimal snappy config changes
+ type: kernel
+@@ -8,11 +8,11 @@ parts:
+   kernel:
+     plugin: kernel
+     source: .
+-    source-branch: snappy_v3.18
++    source-branch: stable-4.4.y
+     source-type: git
+     kdefconfig: [x86_64_defconfig, snappy/generic.config, snappy/security.config, snappy/systemd.config, snappy/snappy.config, snappy/containers.config]
+     kconfigs:
+-      - CONFIG_LOCALVERSION="-snappy_v3.18"
++      - CONFIG_LOCALVERSION="-stable-4.4.y"
+     kernel-initrd-modules:
+       - squashfs
+     kernel-initrd-firmware:
+-- 
+2.17.1
+

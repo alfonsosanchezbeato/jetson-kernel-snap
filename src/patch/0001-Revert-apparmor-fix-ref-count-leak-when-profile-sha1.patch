@@ -1,0 +1,28 @@
+From dc5a5da04dc7150443f6b593f52f143bc422b3d6 Mon Sep 17 00:00:00 2001
+From: Paolo Pisati <paolo.pisati@canonical.com>
+Date: Wed, 22 Feb 2017 10:24:42 +0100
+Subject: [PATCH 01/36] Revert "apparmor: fix ref count leak when profile sha1
+ hash is read"
+
+This reverts commit 6090bfb684a9985e29c3c0aae52a4b93f967e90f.
+
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/apparmorfs.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index 9068369f8a1b..ad4fa49ad1db 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -331,7 +331,6 @@ static int aa_fs_seq_hash_show(struct seq_file *seq, void *v)
+ 			seq_printf(seq, "%.2x", profile->hash[i]);
+ 		seq_puts(seq, "\n");
+ 	}
+-	aa_put_profile(profile);
+ 
+ 	return 0;
+ }
+-- 
+2.17.1
+

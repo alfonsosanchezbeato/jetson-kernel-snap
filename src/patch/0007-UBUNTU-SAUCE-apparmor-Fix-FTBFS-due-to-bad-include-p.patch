@@ -1,0 +1,38 @@
+From 4f80ff792a4139c1f98dba8a334c945fe114b3da Mon Sep 17 00:00:00 2001
+From: Tyler Hicks <tyhicks@canonical.com>
+Date: Tue, 5 Apr 2016 12:35:23 -0500
+Subject: [PATCH 07/36] UBUNTU: SAUCE: apparmor: Fix FTBFS due to bad include
+ path
+
+When header files in security/apparmor/includes/ pull in other header
+files in that directory, they should only include the file name. This
+fixes a build failure reported by Tycho when using `make bindeb-pkg` to
+build the Ubuntu kernel tree but, confusingly, isn't seen when building
+with `fakeroot debian/rules binary-generic`.
+
+Signed-off-by: Tyler Hicks <tyhicks@canonical.com>
+Reported-by: Tycho Andersen <tycho.andersen@canonical.com>
+Cc: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+(cherry picked from commit 0c2748a7ca2cc647ba8859aa0653c496cacac44f)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/include/domain.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/include/domain.h b/security/apparmor/include/domain.h
+index 89cfa757c42e..b5896558c213 100644
+--- a/security/apparmor/include/domain.h
++++ b/security/apparmor/include/domain.h
+@@ -15,7 +15,7 @@
+ #include <linux/binfmts.h>
+ #include <linux/types.h>
+ 
+-#include "include/label.h"
++#include "label.h"
+ 
+ #ifndef __AA_DOMAIN_H
+ #define __AA_DOMAIN_H
+-- 
+2.17.1
+

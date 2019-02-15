@@ -1,0 +1,74 @@
+From 54c5c5ccd590c88a5d08d4e3685ed888098088db Mon Sep 17 00:00:00 2001
+From: Seth Forshee <seth.forshee@canonical.com>
+Date: Wed, 19 Oct 2016 17:13:47 -0500
+Subject: [PATCH 23/36] Revert "UBUNTU: SAUCE: apparmor: fix sleep in critical
+ section"
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+
+This reverts commit 63f6655e74fed75e5007bc8aa6447bcd93327036,
+which is superseded by later patches.
+
+Signed-off-by: Seth Forshee <seth.forshee@canonical.com>
+(cherry picked from commit 6ca7d09d874d0f4092b7104480680dc0cd7384d9)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/mount.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index ee07f7650b01..b380e32a6077 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -405,6 +405,7 @@ int aa_bind_mount(struct aa_label *label, struct path *path,
+ 						   &old_path),
+ 			     old_buffer, &old_name, &info,
+ 			     labels_profile(label)->disconnected);
++	path_put(&old_path);
+ 	if (error)
+ 		goto error;
+ 
+@@ -414,7 +415,6 @@ int aa_bind_mount(struct aa_label *label, struct path *path,
+ 
+ out:
+ 	put_buffers(buffer, old_buffer);
+-	path_put(&old_path);
+ 
+ 	return error;
+ 
+@@ -494,6 +494,7 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 						   &old_path),
+ 			     old_buffer, &old_name, &info,
+ 			     labels_profile(label)->disconnected);
++	path_put(&old_path);
+ 	if (error)
+ 		goto error;
+ 
+@@ -503,7 +504,6 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 
+ out:
+ 	put_buffers(buffer, old_buffer);
+-	path_put(&old_path);
+ 
+ 	return error;
+ 
+@@ -557,6 +557,7 @@ int aa_new_mount(struct aa_label *label, const char *orig_dev_name,
+ 						&dev_path),
+ 				     dev_buffer, &dev_name, &info,
+ 				     labels_profile(label)->disconnected);
++		path_put(&dev_path);
+ 		if (error)
+ 			goto error;
+ 	}
+@@ -573,8 +574,6 @@ int aa_new_mount(struct aa_label *label, const char *orig_dev_name,
+ 
+ cleanup:
+ 	put_buffers(buffer, dev_buffer);
+-	if (requires_dev)
+-		path_put(&dev_path);
+ 
+ 	return error;
+ 
+-- 
+2.17.1
+

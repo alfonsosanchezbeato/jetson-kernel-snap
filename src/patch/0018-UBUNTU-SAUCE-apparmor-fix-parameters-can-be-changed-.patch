@@ -1,0 +1,122 @@
+From 4c08eefe632ee5c3e5ab24fa8c261e22739d8ed3 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 23 Aug 2016 02:05:51 -0700
+Subject: [PATCH 18/36] UBUNTU: SAUCE: apparmor: fix: parameters can be changed
+ after policy is locked
+
+the policy_lock parameter is a one way switch that prevents policy
+from being further modified. Unfortunately some of the module parameters
+can effectively modify policy by turning off enforcement.
+
+split policy_admin_capable into a view check and a full admin check,
+and update the admin check to test the policy_lock parameter.
+
+BugLink: http://bugs.launchpad.net/bugs/1615895
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Tim Gardner <tim.gardner@canonical.com>
+Signed-off-by: Kamal Mostafa <kamal@canonical.com>
+(cherry picked from commit bee8e3370a9675c0add2e56eb953454f6aa31cb5)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/include/policy.h |  1 +
+ security/apparmor/lsm.c            | 12 +++++-------
+ security/apparmor/policy.c         |  7 ++++++-
+ 3 files changed, 12 insertions(+), 8 deletions(-)
+
+diff --git a/security/apparmor/include/policy.h b/security/apparmor/include/policy.h
+index 5e563d70ec36..af2685f5ee51 100644
+--- a/security/apparmor/include/policy.h
++++ b/security/apparmor/include/policy.h
+@@ -280,6 +280,7 @@ static inline int AUDIT_MODE(struct aa_profile *profile)
+ 	return profile->audit;
+ }
+ 
++bool policy_view_capable(void);
+ bool policy_admin_capable(void);
+ bool aa_may_open_profiles(void);
+ int aa_may_manage_policy(struct aa_label *label, u32 mask);
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index a24aae5ad195..0e82a89a9369 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -1358,14 +1358,12 @@ static int param_set_aalockpolicy(const char *val, const struct kernel_param *kp
+ {
+ 	if (!policy_admin_capable())
+ 		return -EPERM;
+-	if (aa_g_lock_policy)
+-		return -EACCES;
+ 	return param_set_bool(val, kp);
+ }
+ 
+ static int param_get_aalockpolicy(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1383,7 +1381,7 @@ static int param_set_aabool(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_aabool(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1401,7 +1399,7 @@ static int param_set_aauint(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_aauint(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1410,7 +1408,7 @@ static int param_get_aauint(char *buffer, const struct kernel_param *kp)
+ 
+ static int param_get_audit(char *buffer, struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1439,7 +1437,7 @@ static int param_set_audit(const char *val, struct kernel_param *kp)
+ 
+ static int param_get_mode(char *buffer, struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 12cd14fcabfd..47dfe65ee6f5 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -617,7 +617,7 @@ static int audit_policy(struct aa_label *label, const char *op,
+ 	return error;
+ }
+ 
+-bool policy_admin_capable(void)
++bool policy_view_capable(void)
+ {
+ 	struct user_namespace *user_ns = current_user_ns();
+ 	struct aa_ns *ns = aa_get_current_ns();
+@@ -633,6 +633,11 @@ bool policy_admin_capable(void)
+ 	return response;
+ }
+ 
++bool policy_admin_capable(void)
++{
++	return policy_view_capable() && !aa_g_lock_policy;
++}
++
+ bool aa_may_open_profiles(void)
+ {
+ 	struct user_namespace *user_ns = current_user_ns();
+-- 
+2.17.1
+

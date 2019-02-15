@@ -1,0 +1,26 @@
+From ce9199b5949abbdc1f181d01ad14d73c6d55ff06 Mon Sep 17 00:00:00 2001
+From: Paolo Pisati <paolo.pisati@canonical.com>
+Date: Wed, 13 Jul 2016 14:57:42 +0200
+Subject: [PATCH 33/36] snapcraft.yaml: squashfs is builtin now
+
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ snapcraft.yaml | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/snapcraft.yaml b/snapcraft.yaml
+index 60428d98cd9c..a09010766e58 100644
+--- a/snapcraft.yaml
++++ b/snapcraft.yaml
+@@ -12,8 +12,6 @@ parts:
+     kdefconfig: [x86_64_defconfig, snappy/generic.config, snappy/security.config, snappy/systemd.config, snappy/snappy.config, snappy/containers.config]
+     kconfigs:
+       - CONFIG_LOCALVERSION="-stable-4.4.y"
+-    kernel-initrd-modules:
+-      - squashfs
+     kernel-initrd-firmware:
+       - lib/firmware/e100/d101m_ucode.bin
+       - lib/firmware/e100/d101s_ucode.bin
+-- 
+2.17.1
+

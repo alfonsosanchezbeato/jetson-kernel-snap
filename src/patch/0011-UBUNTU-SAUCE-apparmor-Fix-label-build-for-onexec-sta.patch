@@ -1,0 +1,41 @@
+From cf5c2951a65d6c24ed06b063281f22093e261fc5 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 23 Aug 2016 02:05:44 -0700
+Subject: [PATCH 11/36] UBUNTU: SAUCE: apparmor: Fix label build for onexec
+ stacking.
+
+The label build for onexec when crossing a namespace boundry is not
+quite correct. The label needs to be built per profile and not based
+on the whole label because the onexec transition only applies to
+profiles within the ns. Where merging against the label could include
+profile that are transitioned via the profile_transition callback
+and should not be in the final label.
+
+BugLink: http://bugs.launchpad.net/bugs/1615881
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Tim Gardner <tim.gardner@canonical.com>
+Signed-off-by: Kamal Mostafa <kamal@canonical.com>
+(cherry picked from commit 1bb0cbd1dac8bdaac881ab61ff4f5fc325823e3d)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/domain.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
+index 536655ce5846..b71bfde66581 100644
+--- a/security/apparmor/domain.c
++++ b/security/apparmor/domain.c
+@@ -644,7 +644,8 @@ static struct aa_label *handle_onexec(struct aa_label *label,
+ 		if (error)
+ 			return ERR_PTR(error);
+ 		new = fn_label_build_in_ns(label, profile, GFP_ATOMIC,
+-					   aa_label_merge(label, onexec,
++					   aa_label_merge(&profile->label,
++							  onexec,
+ 							  GFP_ATOMIC),
+ 					   profile_transition(profile, xname,
+ 							      cond, unsafe));
+-- 
+2.17.1
+

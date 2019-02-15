@@ -1,0 +1,26 @@
+From 1f22d406d6f6fed281cd15f377e9614554d9301b Mon Sep 17 00:00:00 2001
+From: Paolo Pisati <paolo.pisati@canonical.com>
+Date: Tue, 12 Jul 2016 10:29:26 +0200
+Subject: [PATCH 32/36] UBUNTU: [Config] snappy/snappy: SQUASHFS=y
+
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ kernel/configs/snappy/snappy.config | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/configs/snappy/snappy.config b/kernel/configs/snappy/snappy.config
+index 73dbf1e220b7..8b116d9f101a 100644
+--- a/kernel/configs/snappy/snappy.config
++++ b/kernel/configs/snappy/snappy.config
+@@ -16,7 +16,7 @@ CONFIG_AUTOFS4_FS=y
+ CONFIG_CONFIGFS_FS=y
+ CONFIG_KEYS=y
+ CONFIG_ENCRYPTED_KEYS=y
+-CONFIG_SQUASHFS=m
++CONFIG_SQUASHFS=y
+ CONFIG_SQUASHFS_FILE_DIRECT=y
+ CONFIG_SQUASHFS_DECOMP_MULTI_PERCPU=y
+ CONFIG_SQUASHFS_XATTR=y
+-- 
+2.17.1
+

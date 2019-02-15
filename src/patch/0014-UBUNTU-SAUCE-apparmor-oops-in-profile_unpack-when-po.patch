@@ -1,0 +1,37 @@
+From ae8e0eb0ca7a4e9436c99f533aff749b8ec8673c Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 23 Aug 2016 02:05:47 -0700
+Subject: [PATCH 14/36] UBUNTU: SAUCE: apparmor: oops in profile_unpack() when
+ policy_db is not present
+
+BugLink: http://bugs.launchpad.net/bugs/1592547
+
+If unpack_dfa() returns NULL due to the dfa not being present,
+profile_unpack() is not checking if the dfa is not present (NULL).
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Tim Gardner <tim.gardner@canonical.com>
+Signed-off-by: Kamal Mostafa <kamal@canonical.com>
+(cherry picked from commit ea066a90562a7ca64f2706b5d9f1c84919161287)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/policy_unpack.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/security/apparmor/policy_unpack.c b/security/apparmor/policy_unpack.c
+index c62815f936a8..acbcee4bb585 100644
+--- a/security/apparmor/policy_unpack.c
++++ b/security/apparmor/policy_unpack.c
+@@ -658,6 +658,9 @@ static struct aa_profile *unpack_profile(struct aa_ext *e, char **ns_name)
+ 			error = PTR_ERR(profile->policy.dfa);
+ 			profile->policy.dfa = NULL;
+ 			goto fail;
++		} else if (!profile->policy.dfa) {
++			error = -EPROTO;
++			goto fail;
+ 		}
+ 		if (!unpack_u32(e, &profile->policy.start[0], "start"))
+ 			/* default start state */
+-- 
+2.17.1
+

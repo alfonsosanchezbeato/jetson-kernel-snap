@@ -1,0 +1,40 @@
+From af1ab86ba90d141cdb50bf0ee9bb188caf284d87 Mon Sep 17 00:00:00 2001
+From: Paolo Pisati <paolo.pisati@canonical.com>
+Date: Wed, 22 Feb 2017 10:24:44 +0100
+Subject: [PATCH 02/36] Revert "apparmor: fix change_hat not finding hat after
+ policy replacement"
+
+This reverts commit be79d7fa43f91c22e0e140c06aad57e9e5f417b2.
+
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/domain.c | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
+index 53426a6ee6dc..dc0027b28b04 100644
+--- a/security/apparmor/domain.c
++++ b/security/apparmor/domain.c
+@@ -623,8 +623,8 @@ int aa_change_hat(const char *hats[], int count, u64 token, bool permtest)
+ 	/* released below */
+ 	cred = get_current_cred();
+ 	cxt = cred_cxt(cred);
+-	profile = aa_get_newest_profile(aa_cred_profile(cred));
+-	previous_profile = aa_get_newest_profile(cxt->previous);
++	profile = aa_cred_profile(cred);
++	previous_profile = cxt->previous;
+ 
+ 	if (unconfined(profile)) {
+ 		info = "unconfined";
+@@ -720,8 +720,6 @@ audit:
+ out:
+ 	aa_put_profile(hat);
+ 	kfree(name);
+-	aa_put_profile(profile);
+-	aa_put_profile(previous_profile);
+ 	put_cred(cred);
+ 
+ 	return error;
+-- 
+2.17.1
+

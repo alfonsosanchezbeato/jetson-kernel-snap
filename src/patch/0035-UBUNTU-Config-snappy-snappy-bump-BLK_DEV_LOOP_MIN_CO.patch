@@ -1,0 +1,27 @@
+From a1c9b576e1da57a8a016483df26f9f7727aa162a Mon Sep 17 00:00:00 2001
+From: Paolo Pisati <paolo.pisati@canonical.com>
+Date: Wed, 22 Feb 2017 11:12:30 +0100
+Subject: [PATCH 35/36] UBUNTU: [Config] snappy/snappy: bump
+ BLK_DEV_LOOP_MIN_COUNT=256
+
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ kernel/configs/snappy/snappy.config | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/kernel/configs/snappy/snappy.config b/kernel/configs/snappy/snappy.config
+index 8b116d9f101a..e57596ec26af 100644
+--- a/kernel/configs/snappy/snappy.config
++++ b/kernel/configs/snappy/snappy.config
+@@ -16,6 +16,8 @@ CONFIG_AUTOFS4_FS=y
+ CONFIG_CONFIGFS_FS=y
+ CONFIG_KEYS=y
+ CONFIG_ENCRYPTED_KEYS=y
++CONFIG_BLK_DEV_LOOP=y
++CONFIG_BLK_DEV_LOOP_MIN_COUNT=256
+ CONFIG_SQUASHFS=y
+ CONFIG_SQUASHFS_FILE_DIRECT=y
+ CONFIG_SQUASHFS_DECOMP_MULTI_PERCPU=y
+-- 
+2.17.1
+

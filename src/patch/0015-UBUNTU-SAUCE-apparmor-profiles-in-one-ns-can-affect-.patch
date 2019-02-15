@@ -1,0 +1,50 @@
+From f0c27721f1bedcde5e84fd74ebe8e1e22a7edf91 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 23 Aug 2016 02:05:48 -0700
+Subject: [PATCH 15/36] UBUNTU: SAUCE: apparmor: profiles in one ns can affect
+ mediation in another ns
+
+When the ns hierarchy a//foo and b//foo are compared the are
+incorrectly identified as being the same as they have the same depth
+and the same basename.
+
+Instead make sure to compare the full hname to distinguish this case.
+
+BugLink: http://bugs.launchpad.net/bugs/1615887
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Tim Gardner <tim.gardner@canonical.com>
+Signed-off-by: Kamal Mostafa <kamal@canonical.com>
+(cherry picked from commit e9603d7f45e0395513b1eb12b683800bb18069fc)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/label.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index c453fc815cb3..0a1dabdad446 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -112,8 +112,8 @@ static int ns_cmp(struct aa_ns *a, struct aa_ns *b)
+ 
+ 	AA_BUG(!a);
+ 	AA_BUG(!b);
+-	AA_BUG(!a->base.name);
+-	AA_BUG(!b->base.name);
++	AA_BUG(!a->base.hname);
++	AA_BUG(!b->base.hname);
+ 
+ 	if (a == b)
+ 		return 0;
+@@ -122,7 +122,7 @@ static int ns_cmp(struct aa_ns *a, struct aa_ns *b)
+ 	if (res)
+ 		return res;
+ 
+-	return strcmp(a->base.name, b->base.name);
++	return strcmp(a->base.hname, b->base.hname);
+ }
+ 
+ /**
+-- 
+2.17.1
+

@@ -1,0 +1,33 @@
+name: jetson-tx1-kernel
+version: 4.4-tegra-l4t-r28.2.1
+summary: nvidia Jetson TX1 kernel
+description: nvidia Jetson TX1 kernel
+grade: stable
+confinement: strict
+type: kernel
+architectures: [arm64]
+
+parts:
+  kernel:
+    plugin: nil
+    source: src
+    override-pull: |
+      snapcraftctl pull
+      # Get kernel sources, which are distributed across different repos
+      ./source_sync.sh -k tegra-l4t-r28.2.1
+      cd sources/kernel/kernel-4.4
+      # Apply canonical patches - apparmor stuff essentially
+      git am ../../../patch/*
+    override-build: |
+      ./build.sh
+    build-packages:
+      - lsb-release
+      - bc
+      - libssl-dev
+      - rsync
+      - lzop
+      - gcc-aarch64-linux-gnu
+      - jq
+      - squashfs-tools
+      - curl
+      - build-essential

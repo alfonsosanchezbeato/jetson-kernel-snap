@@ -1,0 +1,3946 @@
+From 573ccc3f0ba46a75037b0bb70f0a8c1ece7a0e66 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 4 Oct 2016 01:20:40 -0700
+Subject: [PATCH 24/36] UBUNTU: SAUCE: (no-up) apparmor: sync of apparmor 3.6
+ (from Ubuntu 16.10)
+
+This is a backport of apparmor 3.6 that is in 16.10 to support
+lxc/lxd containers.
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Brad Figg <brad.figg@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+(cherry picked from commit 4125e8e9eab092cab263676834fdc514708ecda0)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ include/linux/security.h                  |  33 +-
+ security/apparmor/Kconfig                 |   2 +-
+ security/apparmor/Makefile                |   2 +-
+ security/apparmor/apparmorfs.c            | 629 ++++++++++++++++++++--
+ security/apparmor/backport.c              |  19 +
+ security/apparmor/crypto.c                |  40 ++
+ security/apparmor/domain.c                | 116 ++--
+ security/apparmor/file.c                  | 131 +++--
+ security/apparmor/include/apparmor.h      |   2 +
+ security/apparmor/include/apparmorfs.h    |  14 +-
+ security/apparmor/include/backport.h      |  20 +
+ security/apparmor/include/crypto.h        |   5 +
+ security/apparmor/include/file.h          |  13 +-
+ security/apparmor/include/mount.h         |  16 +-
+ security/apparmor/include/path.h          |   2 +-
+ security/apparmor/include/perms.h         |  26 +-
+ security/apparmor/include/policy.h        |  31 +-
+ security/apparmor/include/policy_ns.h     |  23 +
+ security/apparmor/include/policy_unpack.h |  27 +-
+ security/apparmor/label.c                 |  17 +-
+ security/apparmor/lsm.c                   | 246 +++++----
+ security/apparmor/match.c                 |   4 +-
+ security/apparmor/mount.c                 | 369 ++++++-------
+ security/apparmor/path.c                  |  12 +-
+ security/apparmor/policy.c                | 124 +++--
+ security/apparmor/policy_ns.c             | 110 ++--
+ security/apparmor/policy_unpack.c         |  96 +++-
+ security/inode.c                          | 103 +++-
+ 28 files changed, 1604 insertions(+), 628 deletions(-)
+ create mode 100644 security/apparmor/backport.c
+ create mode 100644 security/apparmor/include/backport.h
+
+diff --git a/include/linux/security.h b/include/linux/security.h
+index 2f4c1f7aa7db..32a40430732e 100644
+--- a/include/linux/security.h
++++ b/include/linux/security.h
+@@ -28,6 +28,7 @@
+ #include <linux/err.h>
+ #include <linux/string.h>
+ #include <linux/mm.h>
++#include <linux/fs.h>
+ 
+ struct linux_binprm;
+ struct cred;
+@@ -1585,7 +1586,15 @@ static inline void security_audit_rule_free(void *lsmrule)
+ #endif /* CONFIG_AUDIT */
+ 
+ #ifdef CONFIG_SECURITYFS
+-
++extern int securityfs_pin_fs(void);
++extern int __securityfs_setup_d_inode(struct inode *dir, struct dentry *dentry,
++				      umode_t mode, void *data,
++				      const struct file_operations *fops,
++				      const struct inode_operations *iops);
++extern struct dentry *securityfs_create_dentry(const char *name, umode_t mode,
++				        struct dentry *parent, void *data,
++					const struct file_operations *fops,
++					const struct inode_operations *iops);
+ extern struct dentry *securityfs_create_file(const char *name, umode_t mode,
+ 					     struct dentry *parent, void *data,
+ 					     const struct file_operations *fops);
+@@ -1593,6 +1602,28 @@ extern struct dentry *securityfs_create_dir(const char *name, struct dentry *par
+ extern void securityfs_remove(struct dentry *dentry);
+ 
+ #else /* CONFIG_SECURITYFS */
++static inline int securityfs_pin_fs(void)
++{
++	return -ENODEV;
++}
++
++static inline int __securityfs_setup_d_inode(struct inode *dir,
++					struct dentry *dentry,
++					umode_t mode, void *data,
++					const struct file_operations *fops,
++					const struct inode_operations *iops)
++{
++	return -ENODEV;
++}
++
++static inline struct dentry *securityfs_create_dentry(const char *name,
++					umode_t mode,
++					struct dentry *parent, void *data,
++					const struct file_operations *fops,
++					const struct inode_operations *iops)
++{
++	return ERR_PTR(-ENODEV);
++}
+ 
+ static inline struct dentry *securityfs_create_dir(const char *name,
+ 						   struct dentry *parent)
+diff --git a/security/apparmor/Kconfig b/security/apparmor/Kconfig
+index 4cdad1488994..ae38e60a5ac7 100644
+--- a/security/apparmor/Kconfig
++++ b/security/apparmor/Kconfig
+@@ -66,7 +66,7 @@ config SECURITY_APPARMOR_UNCONFINED_INIT
+ 	  If you are unsure how to answer this question, answer Y.
+ 
+ config SECURITY_APPARMOR_HASH
+-	bool "enable introspection of sha1 hashes for loaded profiles"
++	bool "Enable introspection of sha1 hashes for loaded profiles"
+ 	depends on SECURITY_APPARMOR
+ 	select CRYPTO
+ 	select CRYPTO_SHA1
+diff --git a/security/apparmor/Makefile b/security/apparmor/Makefile
+index 3a2d39530137..d85425e62ca5 100644
+--- a/security/apparmor/Makefile
++++ b/security/apparmor/Makefile
+@@ -5,7 +5,7 @@ obj-$(CONFIG_SECURITY_APPARMOR) += apparmor.o
+ apparmor-y := apparmorfs.o audit.o capability.o context.o ipc.o lib.o match.o \
+               path.o domain.o policy.o policy_unpack.o procattr.o lsm.o \
+               resource.o sid.o file.o label.o mount.o net.o af_unix.o \
+-              policy_ns.o
++              policy_ns.o backport.o
+ apparmor-$(CONFIG_SECURITY_APPARMOR_HASH) += crypto.o
+ 
+ clean-files := capability_names.h rlim_names.h net_names.h
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index ff761134b81f..f6a2370b3758 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -23,6 +23,7 @@
+ #include <linux/capability.h>
+ #include <linux/rcupdate.h>
+ #include <uapi/linux/major.h>
++#include <linux/fs.h>
+ 
+ #include "include/apparmor.h"
+ #include "include/apparmorfs.h"
+@@ -34,7 +35,9 @@
+ #include "include/label.h"
+ #include "include/policy.h"
+ #include "include/resource.h"
++#include "include/label.h"
+ #include "include/lib.h"
++#include "include/policy_unpack.h"
+ 
+ /**
+  * aa_mangle_name - mangle a profile name to std profile layout form
+@@ -85,11 +88,12 @@ static int mangle_name(const char *name, char *target)
+  * Returns: kernel buffer containing copy of user buffer data or an
+  *          ERR_PTR on failure.
+  */
+-static char *aa_simple_write_to_buffer(const char __user *userbuf,
+-				       size_t alloc_size, size_t copy_size,
+-				       loff_t *pos)
++static struct aa_loaddata *aa_simple_write_to_buffer(const char __user *userbuf,
++						     size_t alloc_size,
++						     size_t copy_size,
++						     loff_t *pos)
+ {
+-	char *data;
++	struct aa_loaddata *data;
+ 
+ 	BUG_ON(copy_size > alloc_size);
+ 
+@@ -98,11 +102,15 @@ static char *aa_simple_write_to_buffer(const char __user *userbuf,
+ 		return ERR_PTR(-ESPIPE);
+ 
+ 	/* freed by caller to simple_write_to_buffer */
+-	data = kvmalloc(alloc_size);
++	data = kvmalloc(sizeof(*data) + alloc_size);
+ 	if (data == NULL)
+ 		return ERR_PTR(-ENOMEM);
++	kref_init(&data->count);
++	data->size = copy_size;
++	data->hash = NULL;
++	data->abi = 0;
+ 
+-	if (copy_from_user(data, userbuf, copy_size)) {
++	if (copy_from_user(data->data, userbuf, copy_size)) {
+ 		kvfree(data);
+ 		return ERR_PTR(-EFAULT);
+ 	}
+@@ -111,26 +119,27 @@ static char *aa_simple_write_to_buffer(const char __user *userbuf,
+ }
+ 
+ static ssize_t policy_update(u32 mask, const char __user *buf, size_t size,
+-			 loff_t *pos)
++			     loff_t *pos, struct aa_ns *ns)
+ {
+ 	struct aa_label *label;
+ 	ssize_t error;
+-	char *data;
++	struct aa_loaddata *data;
+ 
+ 	label = aa_begin_current_label(DO_UPDATE);
+ 
+ 	/* high level check about policy management - fine grained in
+ 	 * below after unpack
+ 	 */
+-	error = aa_may_manage_policy(label, mask);
++	error = aa_may_manage_policy(label, ns, mask);
+ 	if (error)
+ 		return error;
+ 
+ 	data = aa_simple_write_to_buffer(buf, size, size, pos);
+ 	error = PTR_ERR(data);
+ 	if (!IS_ERR(data)) {
+-		error = aa_replace_profiles(label, mask, data, size);
+-		kvfree(data);
++		error = aa_replace_profiles(ns ? ns : labels_ns(label), label,
++					    mask, data);
++		aa_put_loaddata(data);
+ 	}
+ 	aa_end_current_label(label);
+ 
+@@ -141,7 +150,11 @@ static ssize_t policy_update(u32 mask, const char __user *buf, size_t size,
+ static ssize_t profile_load(struct file *f, const char __user *buf, size_t size,
+ 			    loff_t *pos)
+ {
+-	return policy_update(AA_MAY_LOAD_POLICY, buf, size, pos);
++	struct aa_ns *ns = aa_get_ns(f->f_inode->i_private);
++	int error = policy_update(AA_MAY_LOAD_POLICY, buf, size, pos, ns);
++	aa_put_ns(ns);
++
++	return error;
+ }
+ 
+ static const struct file_operations aa_fs_profile_load = {
+@@ -153,8 +166,12 @@ static const struct file_operations aa_fs_profile_load = {
+ static ssize_t profile_replace(struct file *f, const char __user *buf,
+ 			       size_t size, loff_t *pos)
+ {
+-	return policy_update(AA_MAY_LOAD_POLICY | AA_MAY_REPLACE_POLICY,
+-			     buf, size, pos);
++	struct aa_ns *ns = aa_get_ns(f->f_inode->i_private);
++	int error = policy_update(AA_MAY_LOAD_POLICY | AA_MAY_REPLACE_POLICY,
++				  buf, size, pos, ns);
++	aa_put_ns(ns);
++
++	return error;
+ }
+ 
+ static const struct file_operations aa_fs_profile_replace = {
+@@ -166,17 +183,18 @@ static const struct file_operations aa_fs_profile_replace = {
+ static ssize_t profile_remove(struct file *f, const char __user *buf,
+ 			      size_t size, loff_t *pos)
+ {
++	struct aa_loaddata *data;
+ 	struct aa_label *label;
+ 	ssize_t error;
+-	char *data;
++	struct aa_ns *ns = aa_get_ns(f->f_inode->i_private);
+ 
+ 	label = aa_begin_current_label(DO_UPDATE);
+ 	/* high level check about policy management - fine grained in
+ 	 * below after unpack
+ 	 */
+-	error = aa_may_manage_policy(label, AA_MAY_REMOVE_POLICY);
++	error = aa_may_manage_policy(label, ns, AA_MAY_REMOVE_POLICY);
+ 	if (error)
+-		return error;
++		goto out;
+ 
+ 	/*
+ 	 * aa_remove_profile needs a null terminated string so 1 extra
+@@ -186,12 +204,14 @@ static ssize_t profile_remove(struct file *f, const char __user *buf,
+ 
+ 	error = PTR_ERR(data);
+ 	if (!IS_ERR(data)) {
+-		data[size] = 0;
+-		error = aa_remove_profiles(label, data, size);
+-		kvfree(data);
++		data->data[size] = 0;
++		error = aa_remove_profiles(ns ? ns : labels_ns(label), label,
++					   data->data, size);
++		aa_put_loaddata(data);
+ 	}
++ out:
+ 	aa_end_current_label(label);
+-
++	aa_put_ns(ns);
+ 	return error;
+ }
+ 
+@@ -234,6 +254,98 @@ static void profile_query_cb(struct aa_profile *profile, struct aa_perms *perms,
+ 	aa_perms_accum_raw(perms, &tmp);
+ }
+ 
++/**
++ * query_data - queries a policy and writes its data to buf
++ * @buf: the resulting data is stored here (NOT NULL)
++ * @buf_len: size of buf
++ * @query: query string used to retrieve data
++ * @query_len: size of query including second NUL byte
++ *
++ * The buffers pointed to by buf and query may overlap. The query buffer is
++ * parsed before buf is written to.
++ *
++ * The query should look like "<LABEL>\0<KEY>\0", where <LABEL> is the name of
++ * the security confinement context and <KEY> is the name of the data to
++ * retrieve. <LABEL> and <KEY> must not be NUL-terminated.
++ *
++ * Don't expect the contents of buf to be preserved on failure.
++ *
++ * Returns: number of characters written to buf or -errno on failure
++ */
++static ssize_t query_data(char *buf, size_t buf_len,
++			  char *query, size_t query_len)
++{
++	char *out;
++	const char *key;
++	struct label_it i;
++	struct aa_label *label, *curr;
++	struct aa_profile *profile;
++	struct aa_data *data;
++	u32 bytes;
++	u32 blocks;
++	u32 size;
++
++	if (!query_len)
++		return -EINVAL; /* need a query */
++
++	key = query + strnlen(query, query_len) + 1;
++	if (key + 1 >= query + query_len)
++		return -EINVAL; /* not enough space for a non-empty key */
++	if (key + strnlen(key, query + query_len - key) >= query + query_len)
++		return -EINVAL; /* must end with NUL */
++
++	if (buf_len < sizeof(bytes) + sizeof(blocks))
++		return -EINVAL; /* not enough space */
++
++	curr = aa_begin_current_label(DO_UPDATE);
++	label = aa_label_parse(curr, query, GFP_KERNEL, false, false);
++	aa_end_current_label(curr);
++	if (IS_ERR(label))
++		return PTR_ERR(label);
++
++	/* We are going to leave space for two numbers. The first is the total
++	 * number of bytes we are writing after the first number. This is so
++	 * users can read the full output without reallocation.
++	 *
++	 * The second number is the number of data blocks we're writing. An
++	 * application might be confined by multiple policies having data in
++	 * the same key.
++	 */
++	memset(buf, 0, sizeof(bytes) + sizeof(blocks));
++	out = buf + sizeof(bytes) + sizeof(blocks);
++
++	blocks = 0;
++	label_for_each_confined(i, label, profile) {
++		if (!profile->data)
++			continue;
++
++		data = rhashtable_lookup_fast(profile->data, &key,
++					      profile->data->p);
++
++		if (data) {
++			if (out + sizeof(size) + data->size > buf + buf_len) {
++				aa_put_label(label);
++				return -EINVAL; /* not enough space */
++			}
++			size = __cpu_to_le32(data->size);
++			memcpy(out, &size, sizeof(size));
++			out += sizeof(size);
++			memcpy(out, data->data, data->size);
++			out += data->size;
++			blocks++;
++		}
++	}
++	aa_put_label(label);
++
++	bytes = out - buf - sizeof(bytes);
++	bytes = __cpu_to_le32(bytes);
++	blocks = __cpu_to_le32(blocks);
++	memcpy(buf, &bytes, sizeof(bytes));
++	memcpy(buf + sizeof(bytes), &blocks, sizeof(blocks));
++
++	return out - buf;
++}
++
+ /**
+  * query_label - queries a label and writes permissions to buf
+  * @buf: the resulting permissions string is stored here (NOT NULL)
+@@ -309,18 +421,27 @@ static ssize_t query_label(char *buf, size_t buf_len,
+ #define QUERY_CMD_PROFILE_LEN	8
+ #define QUERY_CMD_LABELALL	"labelall\0"
+ #define QUERY_CMD_LABELALL_LEN	9
++#define QUERY_CMD_DATA		"data\0"
++#define QUERY_CMD_DATA_LEN	5
+ 
+ /**
+- * aa_write_access - generic permissions query
++ * aa_write_access - generic permissions and data query
+  * @file: pointer to open apparmorfs/access file
+  * @ubuf: user buffer containing the complete query string (NOT NULL)
+  * @count: size of ubuf
+  * @ppos: position in the file (MUST BE ZERO)
+  *
+- * Allows for one permission query per open(), write(), and read() sequence.
+- * The only query currently supported is a label-based query. For this query
+- * ubuf must begin with "label\0", followed by the profile query specific
+- * format described in the query_label() function documentation.
++ * Allows for one permissions or data query per open(), write(), and read()
++ * sequence. The only queries currently supported are label-based queries for
++ * permissions or data.
++ *
++ * For permissions queries, ubuf must begin with "label\0", followed by the
++ * profile query specific format described in the query_label() function
++ * documentation.
++ *
++ * For data queries, ubuf must have the form "data\0<LABEL>\0<KEY>\0", where
++ * <LABEL> is the name of the security confinement context and <KEY> is the
++ * name of the data to retrieve.
+  *
+  * Returns: number of bytes written or -errno on failure
+  */
+@@ -352,6 +473,11 @@ static ssize_t aa_write_access(struct file *file, const char __user *ubuf,
+ 		len = query_label(buf, SIMPLE_TRANSACTION_LIMIT,
+ 				  buf + QUERY_CMD_LABELALL_LEN,
+ 				  count - QUERY_CMD_LABELALL_LEN, false);
++	} else if (count > QUERY_CMD_DATA_LEN &&
++		   !memcmp(buf, QUERY_CMD_DATA, QUERY_CMD_DATA_LEN)) {
++		len = query_data(buf, SIMPLE_TRANSACTION_LIMIT,
++				 buf + QUERY_CMD_DATA_LEN,
++				 count - QUERY_CMD_DATA_LEN);
+ 	} else
+ 		len = -EINVAL;
+ 
+@@ -537,6 +663,202 @@ static const struct file_operations aa_fs_seq_hash_fops = {
+ 	.release	= single_release,
+ };
+ 
++static int aa_fs_seq_show_stacked(struct seq_file *seq, void *v)
++{
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	seq_printf(seq, "%s\n", label->size > 1 ? "yes" : "no");
++	aa_end_current_label(label);
++
++	return 0;
++}
++
++static int aa_fs_seq_open_stacked(struct inode *inode, struct file *file)
++{
++	return single_open(file, aa_fs_seq_show_stacked, inode->i_private);
++}
++
++static const struct file_operations aa_fs_stacked = {
++	.owner		= THIS_MODULE,
++	.open		= aa_fs_seq_open_stacked,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++static int aa_fs_seq_show_ns_stacked(struct seq_file *seq, void *v)
++{
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	struct aa_profile *profile;
++	struct label_it it;
++	int count = 1;
++
++	if (label->size > 1) {
++		label_for_each(it, label, profile)
++			if (profile->ns != labels_ns(label)) {
++				count++;
++				break;
++			}
++	}
++
++	seq_printf(seq, "%s\n", count > 1 ? "yes" : "no");
++	aa_end_current_label(label);
++
++	return 0;
++}
++
++static int aa_fs_seq_open_ns_stacked(struct inode *inode, struct file *file)
++{
++	return single_open(file, aa_fs_seq_show_ns_stacked, inode->i_private);
++}
++
++static const struct file_operations aa_fs_ns_stacked = {
++	.owner		= THIS_MODULE,
++	.open		= aa_fs_seq_open_ns_stacked,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++static int aa_fs_seq_show_ns_level(struct seq_file *seq, void *v)
++{
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	seq_printf(seq, "%d\n", labels_ns(label)->level);
++	aa_end_current_label(label);
++
++	return 0;
++}
++
++static int aa_fs_seq_open_ns_level(struct inode *inode, struct file *file)
++{
++	return single_open(file, aa_fs_seq_show_ns_level, inode->i_private);
++}
++
++static const struct file_operations aa_fs_ns_level = {
++	.owner		= THIS_MODULE,
++	.open		= aa_fs_seq_open_ns_level,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++static int aa_fs_seq_show_ns_name(struct seq_file *seq, void *v)
++{
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	seq_printf(seq, "%s\n", labels_ns(label)->base.name);
++	aa_end_current_label(label);
++
++	return 0;
++}
++
++static int aa_fs_seq_open_ns_name(struct inode *inode, struct file *file)
++{
++	return single_open(file, aa_fs_seq_show_ns_name, inode->i_private);
++}
++
++static const struct file_operations aa_fs_ns_name = {
++	.owner		= THIS_MODULE,
++	.open		= aa_fs_seq_open_ns_name,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= single_release,
++};
++
++static int rawdata_release(struct inode *inode, struct file *file)
++{
++	/* TODO: switch to loaddata when profile switched to symlink */
++	aa_put_proxy(file->private_data);
++
++	return 0;
++}
++
++static int aa_fs_seq_raw_abi_show(struct seq_file *seq, void *v)
++{
++	struct aa_proxy *proxy = seq->private;
++	struct aa_label *label = aa_get_label_rcu(&proxy->label);
++	struct aa_profile *profile = labels_profile(label);
++
++	if (profile->rawdata->abi) {
++		seq_printf(seq, "v%d", profile->rawdata->abi);
++		seq_puts(seq, "\n");
++	}
++	aa_put_label(label);
++
++	return 0;
++}
++
++static int aa_fs_seq_raw_abi_open(struct inode *inode, struct file *file)
++{
++	return aa_fs_seq_profile_open(inode, file, aa_fs_seq_raw_abi_show);
++}
++
++static const struct file_operations aa_fs_seq_raw_abi_fops = {
++	.owner		= THIS_MODULE,
++	.open		= aa_fs_seq_raw_abi_open,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= aa_fs_seq_profile_release,
++};
++
++static int aa_fs_seq_raw_hash_show(struct seq_file *seq, void *v)
++{
++	struct aa_proxy *proxy = seq->private;
++	struct aa_label *label = aa_get_label_rcu(&proxy->label);
++	struct aa_profile *profile = labels_profile(label);
++	unsigned int i, size = aa_hash_size();
++
++	if (profile->rawdata->hash) {
++		for (i = 0; i < size; i++)
++			seq_printf(seq, "%.2x", profile->rawdata->hash[i]);
++		seq_puts(seq, "\n");
++	}
++	aa_put_label(label);
++
++	return 0;
++}
++
++static int aa_fs_seq_raw_hash_open(struct inode *inode, struct file *file)
++{
++	return aa_fs_seq_profile_open(inode, file, aa_fs_seq_raw_hash_show);
++}
++
++static const struct file_operations aa_fs_seq_raw_hash_fops = {
++	.owner		= THIS_MODULE,
++	.open		= aa_fs_seq_raw_hash_open,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= aa_fs_seq_profile_release,
++};
++
++static ssize_t rawdata_read(struct file *file, char __user *buf, size_t size,
++			    loff_t *ppos)
++{
++	struct aa_proxy *proxy = file->private_data;
++	struct aa_label *label = aa_get_label_rcu(&proxy->label);
++	struct aa_profile *profile = labels_profile(label);
++
++	ssize_t ret = simple_read_from_buffer(buf, size, ppos, profile->rawdata->data, profile->rawdata->size);
++	aa_put_label(label);
++
++	return ret;
++}
++
++static int rawdata_open(struct inode *inode, struct file *file)
++{
++	if (!policy_view_capable(NULL))
++		return -EACCES;
++
++	file->private_data = aa_get_proxy(inode->i_private);
++
++	return 0;
++}
++
++static const struct file_operations aa_fs_rawdata_fops = {
++	.open = rawdata_open,
++	.read = rawdata_read,
++	.llseek = generic_file_llseek,
++	.release = rawdata_release,
++};
++
+ /** fns to setup dynamic per profile/namespace files **/
+ 
+ /**
+@@ -668,6 +990,29 @@ int __aa_fs_profile_mkdir(struct aa_profile *profile, struct dentry *parent)
+ 		profile->dents[AAFS_PROF_HASH] = dent;
+ 	}
+ 
++	if (profile->rawdata) {
++		dent = create_profile_file(dir, "raw_hash", profile,
++					   &aa_fs_seq_raw_hash_fops);
++		if (IS_ERR(dent))
++			goto fail;
++		profile->dents[AAFS_PROF_RAW_HASH] = dent;
++
++		dent = create_profile_file(dir, "raw_abi", profile,
++					   &aa_fs_seq_raw_abi_fops);
++		if (IS_ERR(dent))
++			goto fail;
++		profile->dents[AAFS_PROF_RAW_ABI] = dent;
++
++		dent = securityfs_create_file("raw_data", S_IFREG | 0444, dir,
++					      profile->label.proxy,
++					      &aa_fs_rawdata_fops);
++		if (IS_ERR(dent))
++			goto fail;
++		profile->dents[AAFS_PROF_RAW_DATA] = dent;
++		d_inode(dent)->i_size = profile->rawdata->size;
++		aa_get_proxy(profile->label.proxy);
++	}
++
+ 	list_for_each_entry(child, &profile->base.profiles, base.list) {
+ 		error = __aa_fs_profile_mkdir(child, prof_child_dir(profile));
+ 		if (error)
+@@ -685,6 +1030,88 @@ fail2:
+ 	return error;
+ }
+ 
++static int ns_mkdir_op(struct inode *dir, struct dentry *dentry, umode_t mode)
++{
++	struct aa_ns *ns, *parent;
++	/* TODO: improve permission check */
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = aa_may_manage_policy(label, NULL, AA_MAY_LOAD_POLICY);
++	aa_end_current_label(label);
++	if (error)
++		return error;
++
++	parent = aa_get_ns(dir->i_private);
++	AA_BUG(d_inode(ns_subns_dir(parent)) != dir);
++
++	/* we have to unlock and then relock to get locking order right
++	 * for pin_fs
++	 */
++	inode_unlock(dir);
++	securityfs_pin_fs();
++	inode_lock_nested(dir, I_MUTEX_PARENT);
++
++	error = __securityfs_setup_d_inode(dir, dentry, mode | S_IFDIR,  NULL,
++					   NULL, NULL);
++	if (error)
++		return error;
++
++	ns = aa_create_ns(parent, ACCESS_ONCE(dentry->d_name.name), dentry);
++	if (IS_ERR(ns)) {
++		error = PTR_ERR(ns);
++		ns = NULL;
++	}
++
++	aa_put_ns(ns);		/* list ref remains */
++	aa_put_ns(parent);
++
++	return error;
++}
++
++static int ns_rmdir_op(struct inode *dir, struct dentry *dentry)
++{
++	struct aa_ns *ns, *parent;
++	/* TODO: improve permission check */
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = aa_may_manage_policy(label, NULL, AA_MAY_LOAD_POLICY);
++	aa_end_current_label(label);
++	if (error)
++		return error;
++
++	 parent = aa_get_ns(dir->i_private);
++	/* rmdir calls the generic securityfs functions to remove files
++	 * from the apparmor dir. It is up to the apparmor ns locking
++	 * to avoid races.
++	 */
++	inode_unlock(dir);
++	inode_unlock(dentry->d_inode);
++
++	mutex_lock(&parent->lock);
++	ns = aa_get_ns(__aa_findn_ns(&parent->sub_ns, dentry->d_name.name,
++				     dentry->d_name.len));
++	if (!ns) {
++		error = -ENOENT;
++		goto out;
++	}
++	AA_BUG(ns_dir(ns) != dentry);
++
++	__aa_remove_ns(ns);
++	aa_put_ns(ns);
++
++out:
++	mutex_unlock(&parent->lock);
++	inode_lock_nested(dir, I_MUTEX_PARENT);
++	inode_lock(dentry->d_inode);
++	aa_put_ns(parent);
++
++	return error;
++}
++
++static const struct inode_operations ns_dir_inode_operations = {
++	.lookup		= simple_lookup,
++	.mkdir		= ns_mkdir_op,
++	.rmdir		= ns_rmdir_op,
++};
++
+ /**
+  *
+  * Requires: @ns->lock held
+@@ -708,21 +1135,91 @@ void __aa_fs_ns_rmdir(struct aa_ns *ns)
+ 		mutex_unlock(&sub->lock);
+ 	}
+ 
++	if (ns_subns_dir(ns)) {
++		sub = d_inode(ns_subns_dir(ns))->i_private;
++		aa_put_ns(sub);
++	}
++	if (ns_subload(ns)) {
++		sub = d_inode(ns_subload(ns))->i_private;
++		aa_put_ns(sub);
++	}
++	if (ns_subreplace(ns)) {
++		sub = d_inode(ns_subreplace(ns))->i_private;
++		aa_put_ns(sub);
++	}
++	if (ns_subremove(ns)) {
++		sub = d_inode(ns_subremove(ns))->i_private;
++		aa_put_ns(sub);
++	}
++
+ 	for (i = AAFS_NS_SIZEOF - 1; i >= 0; --i) {
+ 		securityfs_remove(ns->dents[i]);
+ 		ns->dents[i] = NULL;
+ 	}
+ }
+ 
++/* assumes cleanup in caller */
++static int __aa_fs_ns_mkdir_entries(struct aa_ns *ns, struct dentry *dir)
++{
++	struct dentry *dent;
++
++	AA_BUG(!ns);
++	AA_BUG(!dir);
++
++	dent = securityfs_create_dir("profiles", dir);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	ns_subprofs_dir(ns) = dent;
++
++	dent = securityfs_create_dir("raw_data", dir);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	ns_subdata_dir(ns) = dent;
++
++	dent = securityfs_create_file(".load", 0666, dir, ns,
++				      &aa_fs_profile_load);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	aa_get_ns(ns);
++	ns_subload(ns) = dent;
++
++	dent = securityfs_create_file(".replace", 0666, dir, ns,
++				      &aa_fs_profile_replace);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	aa_get_ns(ns);
++	ns_subreplace(ns) = dent;
++
++	dent = securityfs_create_file(".remove", 0666, dir, ns,
++				      &aa_fs_profile_remove);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	aa_get_ns(ns);
++	ns_subremove(ns) = dent;
++
++	  /* use create_dentry so we can supply private data */
++	dent = securityfs_create_dentry("namespaces",
++					S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO,
++					dir, ns, NULL,
++					&ns_dir_inode_operations);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	aa_get_ns(ns);
++	ns_subns_dir(ns) = dent;
++
++	return 0;
++}
++
+ /**
+  *
+  * Requires: @ns->lock held
+  */
+-int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name)
++int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name,
++		     struct dentry *dent)
+ {
+ 	struct aa_ns *sub;
+ 	struct aa_profile *child;
+-	struct dentry *dent, *dir;
++	struct dentry *dir;
+ 	int error;
+ 
+ 	AA_BUG(!ns);
+@@ -732,30 +1229,29 @@ int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name)
+ 	if (!name)
+ 		name = ns->base.name;
+ 
+-	dent = securityfs_create_dir(name, parent);
+-	if (IS_ERR(dent))
+-		goto fail;
++	if (!dent) {
++		/* create ns dir if it doesn't already exist */
++		dent = securityfs_create_dir(name, parent);
++		if (IS_ERR(dent))
++			goto fail;
++	} else
++		dget(dent);
+ 	ns_dir(ns) = dir = dent;
++	error = __aa_fs_ns_mkdir_entries(ns, dir);
++	if (error)
++		goto fail2;
+ 
+-	dent = securityfs_create_dir("profiles", dir);
+-	if (IS_ERR(dent))
+-		goto fail;
+-	ns_subprofs_dir(ns) = dent;
+-
+-	dent = securityfs_create_dir("namespaces", dir);
+-	if (IS_ERR(dent))
+-		goto fail;
+-	ns_subns_dir(ns) = dent;
+-
++	/* profiles */
+ 	list_for_each_entry(child, &ns->base.profiles, base.list) {
+ 		error = __aa_fs_profile_mkdir(child, ns_subprofs_dir(ns));
+ 		if (error)
+ 			goto fail2;
+ 	}
+ 
++	/* subnamespaces */
+ 	list_for_each_entry(sub, &ns->sub_ns, base.list) {
+ 		mutex_lock(&sub->lock);
+-		error = __aa_fs_ns_mkdir(sub, ns_subns_dir(ns), NULL);
++		error = __aa_fs_ns_mkdir(sub, ns_subns_dir(ns), NULL, NULL);
+ 		mutex_unlock(&sub->lock);
+ 		if (error)
+ 			goto fail2;
+@@ -773,8 +1269,6 @@ fail2:
+ }
+ 
+ 
+-#define list_entry_next(pos, member) \
+-	list_entry(pos->member.next, typeof(*pos), member)
+ #define list_entry_is_head(pos, head, member) (&pos->member == (head))
+ 
+ /**
+@@ -808,7 +1302,7 @@ static struct aa_ns *__next_ns(struct aa_ns *root, struct aa_ns *ns)
+ 	parent = ns->parent;
+ 	while (ns != root) {
+ 		mutex_unlock(&ns->lock);
+-		next = list_entry_next(ns, base.list);
++		next = list_next_entry(ns, base.list);
+ 		if (!list_entry_is_head(next, &parent->sub_ns, base.list)) {
+ 			mutex_lock(&next->lock);
+ 			return next;
+@@ -866,7 +1360,7 @@ static struct aa_profile *__next_profile(struct aa_profile *p)
+ 	parent = rcu_dereference_protected(p->parent,
+ 					   mutex_is_locked(&p->ns->lock));
+ 	while (parent) {
+-		p = list_entry_next(p, base.list);
++		p = list_next_entry(p, base.list);
+ 		if (!list_entry_is_head(p, &parent->base.profiles, base.list))
+ 			return p;
+ 		p = parent;
+@@ -875,7 +1369,7 @@ static struct aa_profile *__next_profile(struct aa_profile *p)
+ 	}
+ 
+ 	/* is next another profile in the namespace */
+-	p = list_entry_next(p, base.list);
++	p = list_next_entry(p, base.list);
+ 	if (!list_entry_is_head(p, &ns->base.profiles, base.list))
+ 		return p;
+ 
+@@ -994,7 +1488,7 @@ static const struct seq_operations aa_fs_profiles_op = {
+ 
+ static int profiles_open(struct inode *inode, struct file *file)
+ {
+-	if (!aa_may_open_profiles())
++	if (!policy_view_capable(NULL))
+ 		return -EACCES;
+ 
+ 	return seq_open(file, &aa_fs_profiles_op);
+@@ -1036,6 +1530,7 @@ static struct aa_fs_entry aa_fs_entry_domain[] = {
+ 	AA_FS_FILE_BOOLEAN("change_onexec",	1),
+ 	AA_FS_FILE_BOOLEAN("change_profile",	1),
+ 	AA_FS_FILE_BOOLEAN("stack",		1),
++	AA_FS_FILE_STRING("version", "1.2"),
+ 	{ }
+ };
+ 
+@@ -1085,10 +1580,11 @@ static struct aa_fs_entry aa_fs_entry_features[] = {
+ };
+ 
+ static struct aa_fs_entry aa_fs_entry_apparmor[] = {
+-	AA_FS_FILE_FOPS(".load", 0666, &aa_fs_profile_load),
+-	AA_FS_FILE_FOPS(".replace", 0666, &aa_fs_profile_replace),
+-	AA_FS_FILE_FOPS(".remove", 0666, &aa_fs_profile_remove),
+ 	AA_FS_FILE_FOPS(".access", 0666, &aa_fs_access),
++	AA_FS_FILE_FOPS(".stacked", 0666, &aa_fs_stacked),
++	AA_FS_FILE_FOPS(".ns_stacked", 0666, &aa_fs_ns_stacked),
++	AA_FS_FILE_FOPS(".ns_level", 0666, &aa_fs_ns_level),
++	AA_FS_FILE_FOPS(".ns_name", 0666, &aa_fs_ns_name),
+ 	AA_FS_FILE_FOPS("profiles", 0444, &aa_fs_profiles_fops),
+ 	AA_FS_DIR("features", aa_fs_entry_features),
+ 	{ }
+@@ -1212,7 +1708,7 @@ static int aa_mk_null_file(struct dentry *parent)
+ 	if (error)
+ 		return error;
+ 
+-	mutex_lock(&parent->d_inode->i_mutex);
++	inode_lock(d_inode(parent));
+ 	dentry = lookup_one_len(NULL_FILE_NAME, parent, strlen(NULL_FILE_NAME));
+ 	if (IS_ERR(dentry)) {
+ 		error = PTR_ERR(dentry);
+@@ -1238,7 +1734,7 @@ static int aa_mk_null_file(struct dentry *parent)
+ out1:
+ 	dput(dentry);
+ out:
+-	mutex_unlock(&parent->d_inode->i_mutex);
++	inode_unlock(d_inode(parent));
+ 	simple_release_fs(&mount, &count);
+ 	return error;
+ }
+@@ -1252,6 +1748,7 @@ out:
+  */
+ static int __init aa_create_aafs(void)
+ {
++	struct dentry *dent;
+ 	int error;
+ 
+ 	if (!apparmor_initialized)
+@@ -1267,8 +1764,32 @@ static int __init aa_create_aafs(void)
+ 	if (error)
+ 		goto error;
+ 
++	dent = securityfs_create_file(".load", 0666, aa_fs_entry.dentry,
++				      NULL, &aa_fs_profile_load);
++	if (IS_ERR(dent)) {
++		error = PTR_ERR(dent);
++		goto error;
++	}
++	ns_subload(root_ns) = dent;
++
++	dent = securityfs_create_file(".replace", 0666, aa_fs_entry.dentry,
++				      NULL, &aa_fs_profile_replace);
++	if (IS_ERR(dent)) {
++		error = PTR_ERR(dent);
++		goto error;
++	}
++	ns_subreplace(root_ns) = dent;
++
++	dent = securityfs_create_file(".remove", 0666, aa_fs_entry.dentry,
++				      NULL, &aa_fs_profile_remove);
++	if (IS_ERR(dent)) {
++		error = PTR_ERR(dent);
++		goto error;
++	}
++	ns_subremove(root_ns) = dent;
++
+ 	mutex_lock(&root_ns->lock);
+-	error = __aa_fs_ns_mkdir(root_ns, aa_fs_entry.dentry, "policy");
++	error = __aa_fs_ns_mkdir(root_ns, aa_fs_entry.dentry, "policy", NULL);
+ 	mutex_unlock(&root_ns->lock);
+ 
+ 	if (error)
+diff --git a/security/apparmor/backport.c b/security/apparmor/backport.c
+new file mode 100644
+index 000000000000..e47da0f8ce8f
+--- /dev/null
++++ b/security/apparmor/backport.c
+@@ -0,0 +1,19 @@
++/*
++ * AppArmor security module
++ *
++ * This file contains AppArmor file mediation function definitions.
++ *
++ * Copyright 2014 Canonical Ltd.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation, version 2 of the
++ * License.
++ *
++ *
++ * This is a file of helper fns backported from newer kernels to support
++ * backporting of apparmor to older kernels. Fns prefixed with code they
++ * are copied of modified from
++ */
++
++#include "include/backport.h"
+diff --git a/security/apparmor/crypto.c b/security/apparmor/crypto.c
+index 532471d0b3a0..5db5fe6bef35 100644
+--- a/security/apparmor/crypto.c
++++ b/security/apparmor/crypto.c
+@@ -29,6 +29,43 @@ unsigned int aa_hash_size(void)
+ 	return apparmor_hash_size;
+ }
+ 
++char *aa_calc_hash(void *data, size_t len)
++{
++	struct {
++		struct shash_desc shash;
++		char ctx[crypto_shash_descsize(apparmor_tfm)];
++	} desc;
++	char *hash = NULL;
++	int error = -ENOMEM;
++
++	if (!apparmor_tfm)
++		return NULL;
++
++	hash = kzalloc(apparmor_hash_size, GFP_KERNEL);
++	if (!hash)
++		goto fail;
++
++	desc.shash.tfm = apparmor_tfm;
++	desc.shash.flags = 0;
++
++	error = crypto_shash_init(&desc.shash);
++	if (error)
++		goto fail;
++	error = crypto_shash_update(&desc.shash, (u8 *) data, len);
++	if (error)
++		goto fail;
++	error = crypto_shash_final(&desc.shash, hash);
++	if (error)
++		goto fail;
++
++	return hash;
++
++fail:
++	kfree(hash);
++
++	return ERR_PTR(error);
++}
++
+ int aa_calc_profile_hash(struct aa_profile *profile, u32 version, void *start,
+ 			 size_t len)
+ {
+@@ -39,6 +76,9 @@ int aa_calc_profile_hash(struct aa_profile *profile, u32 version, void *start,
+ 	int error = -ENOMEM;
+ 	u32 le32_version = cpu_to_le32(version);
+ 
++	if (!aa_g_hash_policy)
++		return 0;
++
+ 	if (!apparmor_tfm)
+ 		return 0;
+ 
+diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
+index 40b0e8bb9e23..27ffaf503be5 100644
+--- a/security/apparmor/domain.c
++++ b/security/apparmor/domain.c
+@@ -488,27 +488,41 @@ static struct aa_label *x_to_label(struct aa_profile *profile,
+ }
+ 
+ static struct aa_label *profile_transition(struct aa_profile *profile,
+-					   const char *name,
+-					   struct path_cond *cond,
++					   const struct linux_binprm *bprm,
++					   char *buffer, struct path_cond *cond,
+ 					   bool *secure_exec)
+ {
+ 	struct aa_label *new = NULL;
+-	const char *info = NULL;
++	const char *info = NULL, *name = NULL, *target = NULL;
+ 	unsigned int state = profile->file.start;
+ 	struct aa_perms perms = {};
+-	const char *target = NULL;
+ 	int error = 0;
+-	
++
++	AA_BUG(!profile);
++	AA_BUG(!bprm);
++	AA_BUG(!buffer);
++
++	error = aa_path_name(&bprm->file->f_path, profile->path_flags, buffer,
++			     &name, &info, profile->disconnected);
++	if (error) {
++		if (profile_unconfined(profile) ||
++		    (profile->label.flags & FLAG_IX_ON_NAME_ERROR)) {
++			AA_DEBUG("name lookup ix on error");
++			error = 0;
++			new = aa_get_newest_label(&profile->label);
++		}
++		name = bprm->filename;
++		goto audit;
++	}
++
+ 	if (profile_unconfined(profile)) {
+ 		new = find_attach(profile->ns, &profile->ns->base.profiles,
+ 				  name);
+ 		if (new) {
+ 			AA_DEBUG("unconfined attached to new label");
+-
+ 			return new;
+ 		}
+ 		AA_DEBUG("unconfined exec no attachment");
+-
+ 		return aa_get_newest_label(&profile->label);
+ 	}
+ 
+@@ -565,14 +579,20 @@ audit:
+ }
+ 
+ static int profile_onexec(struct aa_profile *profile, struct aa_label *onexec,
+-			  bool stack, const char *xname, struct path_cond *cond,
++			  bool stack, const struct linux_binprm *bprm,
++			  char *buffer, struct path_cond *cond,
+ 			  bool *secure_exec)
+ {
+ 	unsigned int state = profile->file.start;
+ 	struct aa_perms perms = {};
+-	const char *info = "change_profile onexec";
++	const char *xname = NULL, *info = "change_profile onexec";
+ 	int error = -EACCES;
+ 
++	AA_BUG(!profile);
++	AA_BUG(!onexec);
++	AA_BUG(!bprm);
++	AA_BUG(!buffer);
++
+ 	if (profile_unconfined(profile)) {
+ 		/* change_profile on exec already granted */
+ 		/*
+@@ -583,6 +603,18 @@ static int profile_onexec(struct aa_profile *profile, struct aa_label *onexec,
+ 		return 0;
+ 	}
+ 
++	error = aa_path_name(&bprm->file->f_path, profile->path_flags, buffer,
++			     &xname, &info, profile->disconnected);
++	if (error) {
++		if (profile_unconfined(profile) ||
++		    (profile->label.flags & FLAG_IX_ON_NAME_ERROR)) {
++			AA_DEBUG("name lookup ix on error");
++			error = 0;
++		}
++		xname = bprm->filename;
++		goto audit;
++	}
++
+ 	/* find exec permissions for name */
+ 	state = aa_str_perms(profile->file.dfa, state, xname, cond, &perms);
+ 	if (!(perms.allow & AA_MAY_ONEXEC)) {
+@@ -618,46 +650,52 @@ audit:
+ 
+ static struct aa_label *handle_onexec(struct aa_label *label,
+ 				      struct aa_label *onexec, bool stack,
+-				      const char *xname,
+-				      struct path_cond *cond,
++				      const struct linux_binprm *bprm,
++				      char *buffer, struct path_cond *cond,
+ 				      bool *unsafe)
+ {
+ 	struct aa_profile *profile;
+ 	struct aa_label *new;
+ 	int error;
+ 
++	AA_BUG(!label);
++	AA_BUG(!onexec);
++	AA_BUG(!bprm);
++	AA_BUG(!buffer);
++
+ 	if (!stack) {
+ 		error = fn_for_each_in_ns(label, profile,
+ 				profile_onexec(profile, onexec, stack,
+-					       xname, cond, unsafe));
++					       bprm, buffer, cond, unsafe));
+ 		if (error)
+ 			return ERR_PTR(error);
+ 		new = fn_label_build_in_ns(label, profile, GFP_ATOMIC,
+-					   aa_get_newest_label(onexec),
+-					   profile_transition(profile, xname,
+-							      cond, unsafe));
++				aa_get_newest_label(onexec),
++				profile_transition(profile, bprm, buffer,
++						   cond, unsafe));
++
+ 	} else {
+ 		/* TODO: determine how much we want to losen this */
+ 		error = fn_for_each_in_ns(label, profile,
+-				profile_onexec(profile, onexec, stack, xname,
+-					       cond, unsafe));
++				profile_onexec(profile, onexec, stack, bprm,
++					       buffer, cond, unsafe));
+ 		if (error)
+ 			return ERR_PTR(error);
+ 		new = fn_label_build_in_ns(label, profile, GFP_ATOMIC,
+-					   aa_label_merge(&profile->label,
+-							  onexec,
+-							  GFP_ATOMIC),
+-					   profile_transition(profile, xname,
+-							      cond, unsafe));
++				aa_label_merge(&profile->label, onexec,
++					       GFP_ATOMIC),
++				profile_transition(profile, bprm, buffer,
++						   cond, unsafe));
+ 	}
+ 
+ 	if (new)
+ 		return new;
+ 
++	/* TODO: get rid of GLOBAL_ROOT_UID */
+ 	error = fn_for_each_in_ns(label, profile,
+ 			aa_audit_file(profile, &nullperms, OP_CHANGE_ONEXEC,
+-				      AA_MAY_ONEXEC, xname, NULL, onexec,
+-				      GLOBAL_ROOT_UID,
++				      AA_MAY_ONEXEC, bprm->filename, NULL,
++				      onexec, GLOBAL_ROOT_UID,
+ 				      "failed to build target label", -ENOMEM));
+ 	return ERR_PTR(error);
+ }
+@@ -676,7 +714,6 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 	struct aa_label *label, *new = NULL;
+ 	struct aa_profile *profile;
+ 	char *buffer = NULL;
+-	const char *xname = NULL;
+ 	const char *info = NULL;
+ 	int error = 0;
+ 	bool unsafe = false;
+@@ -692,28 +729,17 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 	AA_BUG(!ctx);
+ 
+ 	label = aa_get_newest_label(ctx->label);
+-	profile = labels_profile(label);
+ 
+-	/* buffer freed below, xname is pointer into buffer */
++	/* buffer freed below, name is pointer into buffer */
+ 	get_buffers(buffer);
+-	error = aa_path_name(&bprm->file->f_path, profile->path_flags, buffer,
+-			     &xname, &info, profile->disconnected);
+-	if (error) {
+-		if (profile_unconfined(profile) ||
+-		    (profile->label.flags & FLAG_IX_ON_NAME_ERROR))
+-			error = 0;
+-		xname = bprm->filename;
+-		goto audit;
+-	}
+-
+ 	/* Test for onexec first as onexec override other x transitions. */
+ 	if (ctx->onexec)
+-		new = handle_onexec(label, ctx->onexec, ctx->token, xname,
+-				    &cond, &unsafe);
++		new = handle_onexec(label, ctx->onexec, ctx->token,
++				    bprm, buffer, &cond, &unsafe);
+ 	else
+ 		new = fn_label_build(label, profile, GFP_ATOMIC,
+-				profile_transition(profile, xname, &cond,
+-						   &unsafe));
++				profile_transition(profile, bprm, buffer,
++						   &cond, &unsafe));
+ 
+ 	AA_BUG(!new);
+ 	if (IS_ERR(new)) {
+@@ -731,7 +757,7 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 	 * subsets are allowed even when no_new_privs is set because this
+ 	 * aways results in a further reduction of permissions.
+ 	 */
+-	if (bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS &&
++	if ((bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS) &&
+ 	    !unconfined(label) && !aa_label_is_subset(new, label)) {
+ 		error = -EPERM;
+ 		info = "no new privs";
+@@ -753,7 +779,7 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 	if (unsafe) {
+ 		if (DEBUG_ON) {
+ 			dbg_printk("scrubbing environment variables for %s "
+-				   "label=", xname);
++				   "label=", bprm->filename);
+ 			aa_label_printk(new, GFP_ATOMIC);
+ 			dbg_printk("\n");
+ 		}
+@@ -764,7 +790,7 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 		/* when transitioning clear unsafe personality bits */
+ 		if (DEBUG_ON) {
+ 			dbg_printk("apparmor: clearing unsafe personality "
+-				   "bits. %s label=", xname);
++				   "bits. %s label=", bprm->filename);
+ 			aa_label_printk(new, GFP_ATOMIC);
+ 			dbg_printk("\n");
+ 		}
+@@ -786,7 +812,7 @@ done:
+ audit:
+ 	error = fn_for_each(label, profile,
+ 			aa_audit_file(profile, &nullperms, OP_EXEC, MAY_EXEC,
+-				      xname, NULL, new,
++				      bprm->filename, NULL, new,
+ 				      file_inode(bprm->file)->i_uid, info,
+ 				      error));
+ 	aa_put_label(new);
+diff --git a/security/apparmor/file.c b/security/apparmor/file.c
+index e04dd980805b..95bb2eb7183a 100644
+--- a/security/apparmor/file.c
++++ b/security/apparmor/file.c
+@@ -107,7 +107,8 @@ int aa_audit_file(struct aa_profile *profile, struct aa_perms *perms,
+ {
+ 	int type = AUDIT_APPARMOR_AUTO;
+ 
+-	DEFINE_AUDIT_DATA(sa, LSM_AUDIT_DATA_NONE, op);
++	DEFINE_AUDIT_DATA(sa, LSM_AUDIT_DATA_TASK, op);
++	sa.u.tsk = NULL;
+ 	aad(&sa)->request = request;
+ 	aad(&sa)->name = name;
+ 	aad(&sa)->fs.target = target;
+@@ -164,18 +165,15 @@ static inline bool is_deleted(struct dentry *dentry)
+ 	return 0;
+ }
+ 
+-static int path_name(const char *op, struct aa_label *label, struct path *path,
+-		     int flags, char *buffer, const char**name,
+-		     struct path_cond *cond, u32 request, bool delegate_deleted)
++static int path_name(const char *op, struct aa_label *label,
++		     const struct path *path, int flags, char *buffer,
++		     const char**name, struct path_cond *cond, u32 request)
+ {
+ 	struct aa_profile *profile;
+ 	const char *info = NULL;
+ 	int error = aa_path_name(path, flags, buffer, name, &info,
+ 				 labels_profile(label)->disconnected);
+ 	if (error) {
+-		if (error == -ENOENT && is_deleted(path->dentry) &&
+-		    delegate_deleted)
+-			return 0;
+ 		fn_for_each_confined(label, profile,
+ 			aa_audit_file(profile, &nullperms, op, request, *name,
+ 				      NULL, NULL, cond->uid, info, error));
+@@ -288,6 +286,7 @@ int __aa_path_perm(const char *op, struct aa_profile *profile, const char *name,
+ 		   struct aa_perms *perms)
+ {
+ 	int e = 0;
++
+ 	if (profile_unconfined(profile) ||
+ 	    ((flags & PATH_SOCK_COND) && !PROFILE_MEDIATES_AF(profile, AF_UNIX)))
+ 		return 0;
+@@ -298,6 +297,27 @@ int __aa_path_perm(const char *op, struct aa_profile *profile, const char *name,
+ 			     cond->uid, NULL, e);
+ }
+ 
++
++static int profile_path_perm(const char *op, struct aa_profile *profile,
++			     const struct path *path, char *buffer, u32 request,
++			     struct path_cond *cond, int flags,
++			     struct aa_perms *perms)
++{
++	const char *name;
++	int error;
++
++	if (profile_unconfined(profile))
++		return 0;
++
++	error = path_name(op, &profile->label, path,
++			  flags | profile->path_flags, buffer, &name, cond,
++			  request);
++	if (error)
++		return error;
++	return __aa_path_perm(op, profile, name, request, cond, flags,
++			      perms);
++}
++
+ /**
+  * aa_path_perm - do permissions check & audit for @path
+  * @op: operation being checked
+@@ -309,26 +329,20 @@ int __aa_path_perm(const char *op, struct aa_profile *profile, const char *name,
+  *
+  * Returns: %0 else error if access denied or other error
+  */
+-int aa_path_perm(const char *op, struct aa_label *label, struct path *path,
+-		 int flags, u32 request, struct path_cond *cond)
++int aa_path_perm(const char *op, struct aa_label *label,
++		 const struct path *path, int flags, u32 request,
++		 struct path_cond *cond)
+ {
+ 	struct aa_perms perms = {};
+-	char *buffer = NULL;
+-	const char *name;
+ 	struct aa_profile *profile;
++	char *buffer = NULL;
+ 	int error;
+ 
+-	/* TODO: fix path lookup flags */
+-	flags |= labels_profile(label)->path_flags |
+-		(S_ISDIR(cond->mode) ? PATH_IS_DIR : 0);
++	flags |= PATH_DELEGATE_DELETED | (S_ISDIR(cond->mode) ? PATH_IS_DIR : 0);
+ 	get_buffers(buffer);
+-
+-	error = path_name(op, label, path, flags, buffer, &name, cond,
+-			  request, true);
+-	if (!error)
+-		error = fn_for_each_confined(label, profile,
+-				__aa_path_perm(op, profile, name, request, cond,
+-					       flags, &perms));
++	error = fn_for_each_confined(label, profile,
++			profile_path_perm(op, profile, path, buffer, request,
++					  cond, flags, &perms));
+ 
+ 	put_buffers(buffer);
+ 	return error;
+@@ -354,15 +368,30 @@ static inline bool xindex_is_subset(u32 link, u32 target)
+ 	return 1;
+ }
+ 
+-static int profile_path_link(struct aa_profile *profile, const char *lname,
+-			     const char *tname, struct path_cond *cond)
++static int profile_path_link(struct aa_profile *profile,
++			     const struct path *link, char *buffer,
++			     const struct path *target, char *buffer2,
++			     struct path_cond *cond)
+ {
++	const char *lname, *tname = NULL;
+ 	struct aa_perms lperms, perms;
+ 	const char *info = NULL;
+ 	u32 request = AA_MAY_LINK;
+ 	unsigned int state;
+-	int e = -EACCES;
++	int error;
+ 
++	error = path_name(OP_LINK, &profile->label, link, profile->path_flags,
++			  buffer, &lname, cond, AA_MAY_LINK);
++	if (error)
++		goto audit;
++
++	/* buffer2 freed below, tname is pointer in buffer2 */
++	error = path_name(OP_LINK, &profile->label, target, profile->path_flags,
++			  buffer2, &tname, cond, AA_MAY_LINK);
++	if (error)
++		goto audit;
++
++	error = -EACCES;
+ 	/* aa_str_perms - handles the case of the dfa being NULL */
+ 	state = aa_str_perms(profile->file.dfa, profile->file.start, lname,
+ 			     cond, &lperms);
+@@ -413,11 +442,11 @@ static int profile_path_link(struct aa_profile *profile, const char *lname,
+ 	}
+ 
+ done_tests:
+-	e = 0;
++	error = 0;
+ 
+ audit:
+ 	return aa_audit_file(profile, &lperms, OP_LINK, request, lname, tname,
+-			     NULL, cond->uid, info, e);
++			     NULL, cond->uid, info, error);
+ }
+ 
+ /**
+@@ -439,7 +468,7 @@ audit:
+  * Returns: %0 if allowed else error
+  */
+ int aa_path_link(struct aa_label *label, struct dentry *old_dentry,
+-		 struct path *new_dir, struct dentry *new_dentry)
++		 const struct path *new_dir, struct dentry *new_dentry)
+ {
+ 	struct path link = { new_dir->mnt, new_dentry };
+ 	struct path target = { new_dir->mnt, old_dentry };
+@@ -448,31 +477,14 @@ int aa_path_link(struct aa_label *label, struct dentry *old_dentry,
+ 		d_backing_inode(old_dentry)->i_mode
+ 	};
+ 	char *buffer = NULL, *buffer2 = NULL;
+-	const char *lname, *tname = NULL;
+ 	struct aa_profile *profile;
+ 	int error;
+ 
+-	/* TODO: fix path lookup flags, auditing of failed path for profile */
+-	profile = labels_profile(label);
+ 	/* buffer freed below, lname is pointer in buffer */
+ 	get_buffers(buffer, buffer2);
+-	error = path_name(OP_LINK, label, &link,
+-			  labels_profile(label)->path_flags, buffer,
+-			  &lname, &cond, AA_MAY_LINK, false);
+-	if (error)
+-		goto out;
+-
+-	/* buffer2 freed below, tname is pointer in buffer2 */
+-	error = path_name(OP_LINK, label, &target,
+-			  labels_profile(label)->path_flags, buffer2, &tname,
+-			  &cond, AA_MAY_LINK, false);
+-	if (error)
+-		goto out;
+-
+ 	error = fn_for_each_confined(label, profile,
+-			profile_path_link(profile, lname, tname, &cond));
+-
+-out:
++			profile_path_link(profile, &link, buffer, &target,
++					  buffer2, &cond));
+ 	put_buffers(buffer, buffer2);
+ 
+ 	return error;
+@@ -509,7 +521,6 @@ static int __file_path_perm(const char *op, struct aa_label *label,
+ 		.uid = file_inode(file)->i_uid,
+ 		.mode = file_inode(file)->i_mode
+ 	};
+-	const char *name;
+ 	char *buffer;
+ 	int flags, error;
+ 
+@@ -518,27 +529,13 @@ static int __file_path_perm(const char *op, struct aa_label *label,
+ 		/* TODO: check for revocation on stale profiles */
+ 		return 0;
+ 
+-	/* TODO: fix path lookup flags */
+-	flags = PATH_DELEGATE_DELETED | labels_profile(label)->path_flags |
+-		(S_ISDIR(cond.mode) ? PATH_IS_DIR : 0);
++	flags = PATH_DELEGATE_DELETED | (S_ISDIR(cond.mode) ? PATH_IS_DIR : 0);
+ 	get_buffers(buffer);
+ 
+-	error = path_name(op, label, &file->f_path, flags, buffer, &name, &cond,
+-			  request, true);
+-	if (error) {
+-		if (error == 1)
+-			/* Access to open files that are deleted are
+-			 * given a pass (implicit delegation)
+-			 */
+-			/* TODO not needed when full perms cached */
+-			error = 0;
+-		goto out;
+-	}
+-
+ 	/* check every profile in task label not in current cache */
+ 	error = fn_for_each_not_in_set(flabel, label, profile,
+-			__aa_path_perm(op, profile, name, request, &cond, 0,
+-				       &perms));
++			profile_path_perm(op, profile, &file->f_path, buffer,
++					  request, &cond, flags, &perms));
+ 	if (denied) {
+ 		/* check every profile in file label that was not tested
+ 		 * in the initial check above.
+@@ -548,13 +545,13 @@ static int __file_path_perm(const char *op, struct aa_label *label,
+ 		/* TODO: don't audit here */
+ 		last_error(error,
+ 			fn_for_each_not_in_set(label, flabel, profile,
+-				__aa_path_perm(op, profile, name, request,
+-					       &cond, 0, &perms)));
++				profile_path_perm(op, profile, &file->f_path,
++						  buffer, request, &cond, flags,
++						  &perms)));
+ 	}
+ 	if (!error)
+ 		update_file_ctx(file_ctx(file), label, request);
+ 
+-out:
+ 	put_buffers(buffer);
+ 
+ 	return error;
+diff --git a/security/apparmor/include/apparmor.h b/security/apparmor/include/apparmor.h
+index a498e3972f86..34ab4a9af951 100644
+--- a/security/apparmor/include/apparmor.h
++++ b/security/apparmor/include/apparmor.h
+@@ -17,6 +17,8 @@
+ 
+ #include <linux/types.h>
+ 
++#include "backport.h"
++
+ /*
+  * Class of mediation types in the AppArmor policy db
+  */
+diff --git a/security/apparmor/include/apparmorfs.h b/security/apparmor/include/apparmorfs.h
+index c6f84dc5c2b2..bec1cc4357d1 100644
+--- a/security/apparmor/include/apparmorfs.h
++++ b/security/apparmor/include/apparmorfs.h
+@@ -70,6 +70,10 @@ enum aafs_ns_type {
+ 	AAFS_NS_DIR,
+ 	AAFS_NS_PROFS,
+ 	AAFS_NS_NS,
++	AAFS_NS_RAW_DATA,
++	AAFS_NS_LOAD,
++	AAFS_NS_REPLACE,
++	AAFS_NS_REMOVE,
+ 	AAFS_NS_COUNT,
+ 	AAFS_NS_MAX_COUNT,
+ 	AAFS_NS_SIZE,
+@@ -85,12 +89,19 @@ enum aafs_prof_type {
+ 	AAFS_PROF_MODE,
+ 	AAFS_PROF_ATTACH,
+ 	AAFS_PROF_HASH,
++	AAFS_PROF_RAW_DATA,
++	AAFS_PROF_RAW_HASH,
++	AAFS_PROF_RAW_ABI,
+ 	AAFS_PROF_SIZEOF,
+ };
+ 
+ #define ns_dir(X) ((X)->dents[AAFS_NS_DIR])
+ #define ns_subns_dir(X) ((X)->dents[AAFS_NS_NS])
+ #define ns_subprofs_dir(X) ((X)->dents[AAFS_NS_PROFS])
++#define ns_subdata_dir(X) ((X)->dents[AAFS_NS_RAW_DATA])
++#define ns_subload(X) ((X)->dents[AAFS_NS_LOAD])
++#define ns_subreplace(X) ((X)->dents[AAFS_NS_REPLACE])
++#define ns_subremove(X) ((X)->dents[AAFS_NS_REMOVE])
+ 
+ #define prof_dir(X) ((X)->dents[AAFS_PROF_DIR])
+ #define prof_child_dir(X) ((X)->dents[AAFS_PROF_PROFS])
+@@ -100,6 +111,7 @@ void __aa_fs_profile_migrate_dents(struct aa_profile *old,
+ 				   struct aa_profile *new);
+ int __aa_fs_profile_mkdir(struct aa_profile *profile, struct dentry *parent);
+ void __aa_fs_ns_rmdir(struct aa_ns *ns);
+-int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name);
++int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name,
++		     struct dentry *dent);
+ 
+ #endif /* __AA_APPARMORFS_H */
+diff --git a/security/apparmor/include/backport.h b/security/apparmor/include/backport.h
+new file mode 100644
+index 000000000000..ec9ba8531282
+--- /dev/null
++++ b/security/apparmor/include/backport.h
+@@ -0,0 +1,20 @@
++/*
++ * AppArmor security module
++ *
++ * This file contains AppArmor file mediation function definitions.
++ *
++ * Copyright 2014 Canonical Ltd.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation, version 2 of the
++ * License.
++ *
++ *
++ * This is a file of helper macros, defines for backporting newer versions
++ * of apparmor to older kernels
++ */
++#ifndef __AA_BACKPORT_H
++#define __AA_BACKPORT_H
++
++#endif /* __AA_BACKPORT_H */
+diff --git a/security/apparmor/include/crypto.h b/security/apparmor/include/crypto.h
+index dc418e5024d9..c1469f8db174 100644
+--- a/security/apparmor/include/crypto.h
++++ b/security/apparmor/include/crypto.h
+@@ -18,9 +18,14 @@
+ 
+ #ifdef CONFIG_SECURITY_APPARMOR_HASH
+ unsigned int aa_hash_size(void);
++char *aa_calc_hash(void *data, size_t len);
+ int aa_calc_profile_hash(struct aa_profile *profile, u32 version, void *start,
+ 			 size_t len);
+ #else
++static inline char *aa_calc_hash(void *data, size_t len)
++{
++	return NULL;
++}
+ static inline int aa_calc_profile_hash(struct aa_profile *profile, u32 version,
+ 				       void *start, size_t len)
+ {
+diff --git a/security/apparmor/include/file.h b/security/apparmor/include/file.h
+index ff4b4b8fbdf0..9a62b6e07e21 100644
+--- a/security/apparmor/include/file.h
++++ b/security/apparmor/include/file.h
+@@ -191,14 +191,15 @@ unsigned int aa_str_perms(struct aa_dfa *dfa, unsigned int start,
+ 			  const char *name, struct path_cond *cond,
+ 			  struct aa_perms *perms);
+ 
+-int __aa_path_perm(const char *op, struct aa_profile *profile, const char *name,
+-		   u32 request, struct path_cond *cond, int flags,
+-		   struct aa_perms *perms);
+-int aa_path_perm(const char *op, struct aa_label *label, struct path *path,
+-		 int flags, u32 request, struct path_cond *cond);
++int __aa_path_perm(const char *op, struct aa_profile *profile,
++		   const char *name, u32 request, struct path_cond *cond,
++		   int flags, struct aa_perms *perms);
++int aa_path_perm(const char *op, struct aa_label *label,
++		 const struct path *path, int flags, u32 request,
++		 struct path_cond *cond);
+ 
+ int aa_path_link(struct aa_label *label, struct dentry *old_dentry,
+-		 struct path *new_dir, struct dentry *new_dentry);
++		 const struct path *new_dir, struct dentry *new_dentry);
+ 
+ int aa_file_perm(const char *op, struct aa_label *label, struct file *file,
+ 		 u32 request);
+diff --git a/security/apparmor/include/mount.h b/security/apparmor/include/mount.h
+index a12b5b440ebf..6f61bd475c6c 100644
+--- a/security/apparmor/include/mount.h
++++ b/security/apparmor/include/mount.h
+@@ -29,26 +29,26 @@
+ 
+ #define AA_MS_IGNORE_MASK (MS_KERNMOUNT | MS_NOSEC | MS_ACTIVE | MS_BORN)
+ 
+-int aa_remount(struct aa_label *label, struct path *path, unsigned long flags,
+-	       void *data);
++int aa_remount(struct aa_label *label, const struct path *path,
++	       unsigned long flags, void *data);
+ 
+-int aa_bind_mount(struct aa_label *label, struct path *path,
++int aa_bind_mount(struct aa_label *label, const struct path *path,
+ 		  const char *old_name, unsigned long flags);
+ 
+ 
+-int aa_mount_change_type(struct aa_label *label, struct path *path,
++int aa_mount_change_type(struct aa_label *label, const struct path *path,
+ 			 unsigned long flags);
+ 
+-int aa_move_mount(struct aa_label *label, struct path *path,
++int aa_move_mount(struct aa_label *label, const struct path *path,
+ 		  const char *old_name);
+ 
+ int aa_new_mount(struct aa_label *label, const char *dev_name,
+-		 struct path *path, const char *type, unsigned long flags,
++		 const struct path *path, const char *type, unsigned long flags,
+ 		 void *data);
+ 
+ int aa_umount(struct aa_label *label, struct vfsmount *mnt, int flags);
+ 
+-int aa_pivotroot(struct aa_label *label, struct path *old_path,
+-		  struct path *new_path);
++int aa_pivotroot(struct aa_label *label, const struct path *old_path,
++		 const struct path *new_path);
+ 
+ #endif /* __AA_MOUNT_H */
+diff --git a/security/apparmor/include/path.h b/security/apparmor/include/path.h
+index 79c48d4691f7..4f815c6977f2 100644
+--- a/security/apparmor/include/path.h
++++ b/security/apparmor/include/path.h
+@@ -27,7 +27,7 @@ enum path_flags {
+ 	PATH_MEDIATE_DELETED = 0x10000,	 /* mediate deleted paths */
+ };
+ 
+-int aa_path_name(struct path *path, int flags, char *buffer,
++int aa_path_name(const struct path *path, int flags, char *buffer,
+ 		 const char **name, const char **info, const char *disconnect);
+ 
+ #define MAX_PATH_BUFFERS 2
+diff --git a/security/apparmor/include/perms.h b/security/apparmor/include/perms.h
+index 175fe1342163..b7cd839eea9a 100644
+--- a/security/apparmor/include/perms.h
++++ b/security/apparmor/include/perms.h
+@@ -104,14 +104,24 @@ extern struct aa_perms allperms;
+ })
+ 
+ 
+-/* TODO: update for labels pointing to labels instead of profiles
+-*  Note: this only works for profiles from a single namespace
+-*/
++/*
++ * TODO: update for labels pointing to labels instead of profiles
++ * TODO: optimize the walk, currently does subwalk of L2 for each P in L1
++ * gah this doesn't allow for label compound check!!!!
++ */
++#define xcheck_ns_profile_profile(P1, P2, FN, args...)		\
++({								\
++	int ____e = 0;						\
++	if (P1->ns == P2->ns)					\
++		____e = FN((P1), (P2), args);			\
++	(____e);						\
++})
+ 
+-#define xcheck_profile_label(P, L, FN, args...)			\
++#define xcheck_ns_profile_label(P, L, FN, args...)		\
+ ({								\
+ 	struct aa_profile *__p2;				\
+-	fn_for_each((L), __p2, FN((P), __p2, args));		\
++	fn_for_each((L), __p2,					\
++		    xcheck_ns_profile_profile((P), __p2, (FN), args));	\
+ })
+ 
+ #define xcheck_ns_labels(L1, L2, FN, args...)			\
+@@ -120,13 +130,9 @@ extern struct aa_perms allperms;
+ 	fn_for_each((L1), __p1, FN(__p1, (L2), args));		\
+ })
+ 
+-/* todo: fix to handle multiple namespaces */
+-#define xcheck_labels(L1, L2, FN, args...)			\
+-	xcheck_ns_labels((L1), (L2), FN, args)
+-
+ /* Do the cross check but applying FN at the profiles level */
+ #define xcheck_labels_profiles(L1, L2, FN, args...)		\
+-	xcheck_ns_labels((L1), (L2), xcheck_profile_label, (FN), args)
++	xcheck_ns_labels((L1), (L2), xcheck_ns_profile_label, (FN), args)
+ 
+ 
+ #define FINAL_CHECK true
+diff --git a/security/apparmor/include/policy.h b/security/apparmor/include/policy.h
+index af2685f5ee51..b6b10a695641 100644
+--- a/security/apparmor/include/policy.h
++++ b/security/apparmor/include/policy.h
+@@ -18,6 +18,7 @@
+ #include <linux/capability.h>
+ #include <linux/cred.h>
+ #include <linux/kref.h>
++#include <linux/rhashtable.h>
+ #include <linux/sched.h>
+ #include <linux/slab.h>
+ #include <linux/socket.h>
+@@ -78,6 +79,19 @@ struct aa_policydb {
+ 
+ };
+ 
++/* struct aa_data - generic data structure
++ * key: name for retrieving this data
++ * size: size of data in bytes
++ * data: binary data
++ * head: reserved for rhashtable
++ */
++struct aa_data {
++	char *key;
++	size_t size;
++	char *data;
++	struct rhash_head head;
++};
++
+ /* struct aa_profile - basic confinement data
+  * @base - base components of the profile (name, refcount, lists, lock ...)
+  * @label - label this profile is an extension of
+@@ -97,9 +111,9 @@ struct aa_policydb {
+  * @caps: capabilities for the profile
+  * @net: network controls for the profile
+  * @rlimits: rlimits for the profile
+- *
+  * @dents: dentries for the profiles file entries in apparmorfs
+  * @dirname: name of the profile dir in apparmorfs
++ * @data: hashtable for free-form policy aa_data
+  *
+  * The AppArmor profile contains the basic confinement data.  Each profile
+  * has a name, and exists in a namespace.  The @name and @exec_match are
+@@ -135,9 +149,11 @@ struct aa_profile {
+ 	struct aa_net net;
+ 	struct aa_rlimit rlimits;
+ 
++	struct aa_loaddata *rawdata;
+ 	unsigned char *hash;
+ 	char *dirname;
+ 	struct dentry *dents[AAFS_PROF_SIZEOF];
++	struct rhashtable *data;
+ 	struct aa_label label;
+ };
+ 
+@@ -169,9 +185,10 @@ struct aa_profile *aa_fqlookupn_profile(struct aa_label *base,
+ 					const char *fqname, size_t n);
+ struct aa_profile *aa_match_profile(struct aa_ns *ns, const char *name);
+ 
+-ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+-			    size_t size);
+-ssize_t aa_remove_profiles(struct aa_label *label, char *name, size_t size);
++ssize_t aa_replace_profiles(struct aa_ns *view, struct aa_label *label,
++			    u32 mask, struct aa_loaddata *udata);
++ssize_t aa_remove_profiles(struct aa_ns *view, struct aa_label *label,
++			   char *name, size_t size);
+ void __aa_profile_list_release(struct list_head *head);
+ 
+ #define PROF_ADD 1
+@@ -280,9 +297,9 @@ static inline int AUDIT_MODE(struct aa_profile *profile)
+ 	return profile->audit;
+ }
+ 
+-bool policy_view_capable(void);
+-bool policy_admin_capable(void);
++bool policy_view_capable(struct aa_ns *ns);
++bool policy_admin_capable(struct aa_ns *ns);
+ bool aa_may_open_profiles(void);
+-int aa_may_manage_policy(struct aa_label *label, u32 mask);
++int aa_may_manage_policy(struct aa_label *label, struct aa_ns *ns, u32 mask);
+ 
+ #endif /* __AA_POLICY_H */
+diff --git a/security/apparmor/include/policy_ns.h b/security/apparmor/include/policy_ns.h
+index 65b1e1ec749c..4c16c9acdbcf 100644
+--- a/security/apparmor/include/policy_ns.h
++++ b/security/apparmor/include/policy_ns.h
+@@ -88,6 +88,8 @@ void aa_free_ns_kref(struct kref *kref);
+ 
+ struct aa_ns *aa_find_ns(struct aa_ns *root, const char *name);
+ struct aa_ns *aa_findn_ns(struct aa_ns *root, const char *name, size_t n);
++struct aa_ns *aa_create_ns(struct aa_ns *parent, const char *name,
++			   struct dentry *dir);
+ struct aa_ns *aa_prepare_ns(struct aa_ns *root, const char *name);
+ void __aa_remove_ns(struct aa_ns *ns);
+ 
+@@ -124,4 +126,25 @@ static inline void aa_put_ns(struct aa_ns *ns)
+ 		aa_put_profile(ns->unconfined);
+ }
+ 
++/**
++ * __aa_findn_ns - find a namespace on a list by @name
++ * @head: list to search for namespace on  (NOT NULL)
++ * @name: name of namespace to look for  (NOT NULL)
++ * @n: length of @name
++ * Returns: unrefcounted namespace
++ *
++ * Requires: rcu_read_lock be held
++ */
++static inline struct aa_ns *__aa_findn_ns(struct list_head *head,
++					  const char *name, size_t n)
++{
++	return (struct aa_ns *)__policy_strn_find(head, name, n);
++}
++
++static inline struct aa_ns *__aa_find_ns(struct list_head *head,
++					 const char *name)
++{
++	return __aa_findn_ns(head, name, strlen(name));
++}
++
+ #endif /* AA_NAMESPACE_H */
+diff --git a/security/apparmor/include/policy_unpack.h b/security/apparmor/include/policy_unpack.h
+index c2f7a96029b6..4c1319eebc42 100644
+--- a/security/apparmor/include/policy_unpack.h
++++ b/security/apparmor/include/policy_unpack.h
+@@ -16,6 +16,7 @@
+ #define __POLICY_INTERFACE_H
+ 
+ #include <linux/list.h>
++#include <linux/kref.h>
+ 
+ struct aa_load_ent {
+ 	struct list_head list;
+@@ -35,6 +36,30 @@ struct aa_load_ent *aa_load_ent_alloc(void);
+ #define PACKED_MODE_KILL	2
+ #define PACKED_MODE_UNCONFINED	3
+ 
+-int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns);
++/* struct aa_loaddata - buffer of policy load data set */
++struct aa_loaddata {
++	struct kref count;
++	size_t size;
++	int abi;
++	unsigned char *hash;
++	char data[];
++};
++
++int aa_unpack(struct aa_loaddata *udata, struct list_head *lh, const char **ns);
++
++static inline struct aa_loaddata *
++aa_get_loaddata(struct aa_loaddata *data)
++{
++	if (data)
++		kref_get(&(data->count));
++	return data;
++}
++
++void aa_loaddata_kref(struct kref *kref);
++static inline void aa_put_loaddata(struct aa_loaddata *data)
++{
++	if (data)
++		kref_put(&data->count, aa_loaddata_kref);
++}
+ 
+ #endif /* __POLICY_INTERFACE_H */
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index ce150a8b1d66..738fe5218756 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1061,8 +1061,11 @@ static struct aa_label *label_merge_insert(struct aa_label *new,
+ 	AA_BUG(new->size < a->size + b->size);
+ 
+ 	label_for_each_in_merge(i, a, b, next) {
++		AA_BUG(!next);
+ 		if (profile_is_stale(next)) {
+ 			new->vec[k] = aa_get_newest_profile(next);
++			AA_BUG(!new->vec[k]->label.proxy);
++			AA_BUG(!new->vec[k]->label.proxy->label);
+ 			if (next->label.proxy != new->vec[k]->label.proxy)
+ 				invcount++;
+ 			k++;
+@@ -1991,10 +1994,8 @@ static struct aa_label *__label_update(struct aa_label *label)
+ {
+ 	struct aa_label *new, *tmp;
+ 	struct aa_labelset *ls;
+-	struct aa_profile *p;
+-	struct label_it i;
+ 	unsigned long flags;
+-	int invcount = 0;
++	int i, invcount = 0;
+ 
+ 	AA_BUG(!label);
+ 	AA_BUG(!mutex_is_locked(&labels_ns(label)->lock));
+@@ -2008,9 +2009,13 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 	 */
+ 	ls = labels_set(label);
+ 	write_lock_irqsave(&ls->lock, flags);
+-	label_for_each(i, label, p) {
+-		new->vec[i.i] = aa_get_newest_profile(p);
+-		if (new->vec[i.i]->label.proxy != p->label.proxy)
++	for (i = 0; i < label->size; i++) {
++		AA_BUG(!label->vec[i]);
++		new->vec[i] = aa_get_newest_profile(label->vec[i]);
++		AA_BUG(!new->vec[i]);
++		AA_BUG(!new->vec[i]->label.proxy);
++		AA_BUG(!new->vec[i]->label.proxy->label);
++		if (new->vec[i]->label.proxy != label->vec[i]->label.proxy)
+ 			invcount++;
+ 	}
+ 
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index 0e82a89a9369..2e5463daa984 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -105,7 +105,7 @@ static int apparmor_ptrace_access_check(struct task_struct *child,
+ {
+ 	struct aa_label *tracer, *tracee;
+ 	int error;
+-	
++
+ 	tracer = aa_begin_current_label(DO_UPDATE);
+ 	tracee = aa_get_task_label(child);
+ 	error = aa_may_ptrace(tracer, tracee,
+@@ -120,7 +120,7 @@ static int apparmor_ptrace_traceme(struct task_struct *parent)
+ {
+ 	struct aa_label *tracer, *tracee;
+ 	int error;
+-	
++
+ 	tracee = aa_begin_current_label(DO_UPDATE);
+ 	tracer = aa_get_task_label(parent);
+ 	error = aa_may_ptrace(tracer, tracee, AA_PTRACE_TRACE);
+@@ -186,7 +186,7 @@ static int apparmor_capable(const struct cred *cred, struct user_namespace *ns,
+  *
+  * Returns: %0 else error code if error or permission denied
+  */
+-static int common_perm(const char *op, struct path *path, u32 mask,
++static int common_perm(const char *op, const struct path *path, u32 mask,
+ 		       struct path_cond *cond)
+ {
+ 	struct aa_label *label;
+@@ -200,12 +200,15 @@ static int common_perm(const char *op, struct path *path, u32 mask,
+ 	return error;
+ }
+ 
+-static int common_perm_cond(const char *op, struct path *path, u32 mask)
++static int common_perm_cond(const char *op, const struct path *path, u32 mask)
+ {
+ 	struct path_cond cond = { d_backing_inode(path->dentry)->i_uid,
+ 				  d_backing_inode(path->dentry)->i_mode
+ 	};
+ 
++	if (!path_mediated_fs(path->dentry))
++		return 0;
++
+ 	return common_perm(op, path, mask, &cond);
+ }
+ 
+@@ -229,7 +232,7 @@ static void apparmor_inode_free_security(struct inode *inode)
+  *
+  * Returns: %0 else error code if error or permission denied
+  */
+-static int common_perm_dir_dentry(const char *op, struct path *dir,
++static int common_perm_dir_dentry(const char *op, const struct path *dir,
+ 				  struct dentry *dentry, u32 mask,
+ 				  struct path_cond *cond)
+ {
+@@ -238,23 +241,6 @@ static int common_perm_dir_dentry(const char *op, struct path *dir,
+ 	return common_perm(op, &path, mask, cond);
+ }
+ 
+-/**
+- * common_perm_mnt_dentry - common permission wrapper when mnt, dentry
+- * @op: operation being checked
+- * @mnt: mount point of dentry (NOT NULL)
+- * @dentry: dentry to check  (NOT NULL)
+- * @mask: requested permissions mask
+- *
+- * Returns: %0 else error code if error or permission denied
+- */
+-static int common_perm_mnt_dentry(const char *op, struct vfsmount *mnt,
+-				  struct dentry *dentry, u32 mask)
+-{
+-	struct path path = { mnt, dentry };
+-
+-	return common_perm_cond(op, &path, mask);
+-}
+-
+ /**
+  * common_perm_rm - common permission wrapper for operations doing rm
+  * @op: operation being checked
+@@ -264,13 +250,13 @@ static int common_perm_mnt_dentry(const char *op, struct vfsmount *mnt,
+  *
+  * Returns: %0 else error code if error or permission denied
+  */
+-static int common_perm_rm(const char *op, struct path *dir,
++static int common_perm_rm(const char *op, const struct path *dir,
+ 			  struct dentry *dentry, u32 mask)
+ {
+ 	struct inode *inode = d_backing_inode(dentry);
+ 	struct path_cond cond = { };
+ 
+-	if (!inode || !dir->mnt || !path_mediated_fs(dentry))
++	if (!inode || !path_mediated_fs(dentry))
+ 		return 0;
+ 
+ 	cond.uid = inode->i_uid;
+@@ -289,56 +275,53 @@ static int common_perm_rm(const char *op, struct path *dir,
+  *
+  * Returns: %0 else error code if error or permission denied
+  */
+-static int common_perm_create(const char *op, struct path *dir, struct dentry *dentry,
+-			      u32 mask, umode_t mode)
++static int common_perm_create(const char *op, const struct path *dir,
++			      struct dentry *dentry, u32 mask, umode_t mode)
+ {
+ 	struct path_cond cond = { current_fsuid(), mode };
+ 
+-	if (!dir->mnt || !path_mediated_fs(dir->dentry))
++	if (!path_mediated_fs(dir->dentry))
+ 		return 0;
+ 
+ 	return common_perm_dir_dentry(op, dir, dentry, mask, &cond);
+ }
+ 
+-static int apparmor_path_unlink(struct path *dir, struct dentry *dentry)
++static int apparmor_path_unlink(const struct path *dir, struct dentry *dentry)
+ {
+ 	return common_perm_rm(OP_UNLINK, dir, dentry, AA_MAY_DELETE);
+ }
+ 
+-static int apparmor_path_mkdir(struct path *dir, struct dentry *dentry,
++static int apparmor_path_mkdir(const struct path *dir, struct dentry *dentry,
+ 			       umode_t mode)
+ {
+ 	return common_perm_create(OP_MKDIR, dir, dentry, AA_MAY_CREATE,
+ 				  S_IFDIR);
+ }
+ 
+-static int apparmor_path_rmdir(struct path *dir, struct dentry *dentry)
++static int apparmor_path_rmdir(const struct path *dir, struct dentry *dentry)
+ {
+ 	return common_perm_rm(OP_RMDIR, dir, dentry, AA_MAY_DELETE);
+ }
+ 
+-static int apparmor_path_mknod(struct path *dir, struct dentry *dentry,
++static int apparmor_path_mknod(const struct path *dir, struct dentry *dentry,
+ 			       umode_t mode, unsigned int dev)
+ {
+ 	return common_perm_create(OP_MKNOD, dir, dentry, AA_MAY_CREATE, mode);
+ }
+ 
+-static int apparmor_path_truncate(struct path *path)
++static int apparmor_path_truncate(const struct path *path)
+ {
+-	if (!path->mnt || !path_mediated_fs(path->dentry))
+-		return 0;
+-
+ 	return common_perm_cond(OP_TRUNC, path, MAY_WRITE | AA_MAY_SETATTR);
+ }
+ 
+-static int apparmor_path_symlink(struct path *dir, struct dentry *dentry,
++static int apparmor_path_symlink(const struct path *dir, struct dentry *dentry,
+ 				 const char *old_name)
+ {
+ 	return common_perm_create(OP_SYMLINK, dir, dentry, AA_MAY_CREATE,
+ 				  S_IFLNK);
+ }
+ 
+-static int apparmor_path_link(struct dentry *old_dentry, struct path *new_dir,
++static int apparmor_path_link(struct dentry *old_dentry, const struct path *new_dir,
+ 			      struct dentry *new_dentry)
+ {
+ 	struct aa_label *label;
+@@ -355,8 +338,8 @@ static int apparmor_path_link(struct dentry *old_dentry, struct path *new_dir,
+ 	return error;
+ }
+ 
+-static int apparmor_path_rename(struct path *old_dir, struct dentry *old_dentry,
+-				struct path *new_dir, struct dentry *new_dentry)
++static int apparmor_path_rename(const struct path *old_dir, struct dentry *old_dentry,
++				const struct path *new_dir, struct dentry *new_dentry)
+ {
+ 	struct aa_label *label;
+ 	int error = 0;
+@@ -387,29 +370,19 @@ static int apparmor_path_rename(struct path *old_dir, struct dentry *old_dentry,
+ 	return error;
+ }
+ 
+-static int apparmor_path_chmod(struct path *path, umode_t mode)
++static int apparmor_path_chmod(const struct path *path, umode_t mode)
+ {
+-	if (!path_mediated_fs(path->dentry))
+-		return 0;
+-
+ 	return common_perm_cond(OP_CHMOD, path, AA_MAY_CHMOD);
+ }
+ 
+-static int apparmor_path_chown(struct path *path, kuid_t uid, kgid_t gid)
++static int apparmor_path_chown(const struct path *path, kuid_t uid, kgid_t gid)
+ {
+-	if (!path_mediated_fs(path->dentry))
+-		return 0;
+-
+ 	return common_perm_cond(OP_CHOWN, path, AA_MAY_CHOWN);
+ }
+ 
+ static int apparmor_inode_getattr(const struct path *path)
+ {
+-	if (!path_mediated_fs(path->dentry))
+-		return 0;
+-
+-	return common_perm_mnt_dentry(OP_GETATTR, path->mnt, path->dentry,
+-				      AA_MAY_GETATTR);
++	return common_perm_cond(OP_GETATTR, path, AA_MAY_GETATTR);
+ }
+ 
+ static int apparmor_file_open(struct file *file, const struct cred *cred)
+@@ -532,7 +505,7 @@ static int apparmor_file_mprotect(struct vm_area_struct *vma,
+ 			   !(vma->vm_flags & VM_SHARED) ? MAP_PRIVATE : 0);
+ }
+ 
+-static int apparmor_sb_mount(const char *dev_name, struct path *path,
++static int apparmor_sb_mount(const char *dev_name, const struct path *path,
+ 			     const char *type, unsigned long flags, void *data)
+ {
+ 	struct aa_label *label;
+@@ -577,7 +550,8 @@ static int apparmor_sb_umount(struct vfsmount *mnt, int flags)
+ 	return error;
+ }
+ 
+-static int apparmor_sb_pivotroot(struct path *old_path, struct path *new_path)
++static int apparmor_sb_pivotroot(const struct path *old_path,
++				 const struct path *new_path)
+ {
+ 	struct aa_label *label;
+ 	int error = 0;
+@@ -620,37 +594,37 @@ static int apparmor_getprocattr(struct task_struct *task, char *name,
+ static int apparmor_setprocattr(struct task_struct *task, char *name,
+ 				void *value, size_t size)
+ {
+-	char *command, *args = value;
++	char *command, *largs = NULL, *args = value;
+ 	size_t arg_size;
+ 	int error;
+ 	DEFINE_AUDIT_DATA(sa, LSM_AUDIT_DATA_NONE, OP_SETPROCATTR);
+ 
+ 	if (size == 0)
+ 		return -EINVAL;
+-	/* args points to a PAGE_SIZE buffer, AppArmor requires that
+-	 * the buffer must be null terminated or have size <= PAGE_SIZE -1
+-	 * so that AppArmor can null terminate them
+-	 */
+-	if (args[size - 1] != '\0') {
+-		if (size == PAGE_SIZE)
+-			return -EINVAL;
+-		args[size] = '\0';
+-	}
+-
+ 	/* task can only write its own attributes */
+ 	if (current != task)
+ 		return -EACCES;
+ 
+-	args = value;
++	/* AppArmor requires that the buffer must be null terminated atm */
++	if (args[size - 1] != '\0') {
++		/* null terminate */
++		largs = args = kmalloc(size + 1, GFP_KERNEL);
++		if (!args)
++			return -ENOMEM;
++		memcpy(args, value, size);
++		args[size] = '\0';
++	}
++
++	error = -EINVAL;
+ 	args = strim(args);
+ 	command = strsep(&args, " ");
+ 	if (!args)
+-		return -EINVAL;
++		goto out;
+ 	args = skip_spaces(args);
+ 	if (!*args)
+-		return -EINVAL;
++		goto out;
+ 
+-	arg_size = size - (args - (char *) value);
++	arg_size = size - (args - (largs ? largs : (char *) value));
+ 	if (strcmp(name, "current") == 0) {
+ 		if (strcmp(command, "changehat") == 0) {
+ 			error = aa_setprocattr_changehat(args, arg_size,
+@@ -680,19 +654,21 @@ static int apparmor_setprocattr(struct task_struct *task, char *name,
+ 			goto fail;
+ 	} else
+ 		/* only support the "current" and "exec" process attributes */
+-		return -EINVAL;
++		goto fail;
+ 
+ 	if (!error)
+ 		error = size;
++out:
++	kfree(largs);
+ 	return error;
+ 
+ fail:
+ 	aad(&sa)->label = aa_begin_current_label(DO_UPDATE);
+ 	aad(&sa)->info = name;
+-	aad(&sa)->error = -EINVAL;
++	aad(&sa)->error = error = -EINVAL;
+ 	aa_audit_msg(AUDIT_APPARMOR_DENIED, &sa, NULL);
+ 	aa_end_current_label(aad(&sa)->label);
+-	return -EINVAL;
++	goto out;
+ }
+ 
+ /**
+@@ -1164,6 +1140,78 @@ static int apparmor_task_kill(struct task_struct *target, struct siginfo *info,
+ 	return error;
+ }
+ 
++/* 4.6 backport wrappers to keep constification of struct path */
++static int wrap_apparmor_sb_mount(const char *dev_name, struct path *path,
++				  const char *type, unsigned long flags,
++				  void *data)
++{
++	return apparmor_sb_mount(dev_name, path, type, flags, data);
++}
++
++static int wrap_apparmor_sb_pivotroot(struct path *old_path,
++				      struct path *new_path)
++{
++	return apparmor_sb_pivotroot(old_path, new_path);
++}
++
++static int wrap_apparmor_path_link(struct dentry *old_dentry,
++				   struct path *new_dir,
++				   struct dentry *new_dentry)
++{
++	return apparmor_path_link(old_dentry, new_dir, new_dentry);
++}
++
++static int wrap_apparmor_path_unlink(struct path *dir, struct dentry *dentry)
++{
++	return apparmor_path_unlink(dir, dentry);
++}
++
++static int wrap_apparmor_path_symlink(struct path *dir, struct dentry *dentry,
++				      const char *old_name)
++{
++	return apparmor_path_symlink(dir, dentry, old_name);
++}
++
++static int wrap_apparmor_path_mkdir(struct path *dir, struct dentry *dentry,
++				    umode_t mode)
++{
++	return apparmor_path_mkdir(dir, dentry, mode);
++}
++
++static int wrap_apparmor_path_rmdir(struct path *dir, struct dentry *dentry)
++{
++	return apparmor_path_rmdir(dir, dentry);
++}
++
++static int wrap_apparmor_path_mknod(struct path *dir, struct dentry *dentry,
++				    umode_t mode, unsigned int dev)
++{
++	return apparmor_path_mknod(dir, dentry, mode, dev);
++}
++
++static int wrap_apparmor_path_rename(struct path *old_dir,
++				     struct dentry *old_dentry,
++				     struct path *new_dir,
++				     struct dentry *new_dentry)
++{
++	return apparmor_path_rename(old_dir, old_dentry, new_dir, new_dentry);
++}
++
++static int wrap_apparmor_path_chmod(struct path *path, umode_t mode)
++{
++	return apparmor_path_chmod(path, mode);
++}
++
++static int wrap_apparmor_path_chown(struct path *path, kuid_t uid, kgid_t gid)
++{
++	return apparmor_path_chown(path, uid, gid);
++}
++
++static int wrap_apparmor_path_truncate(struct path *path)
++{
++	return apparmor_path_truncate(path);
++}
++
+ #ifndef LSM_HOOKS_NAME
+ #define LSM_HOOKS_NAME(X) //.name =	(X),
+ #endif
+@@ -1177,20 +1225,20 @@ static struct security_hook_list apparmor_hooks[] = {
+ 
+ 	LSM_HOOK_INIT(inode_free_security, apparmor_inode_free_security),
+ 
+-	LSM_HOOK_INIT(sb_mount, apparmor_sb_mount),
++	LSM_HOOK_INIT(sb_mount, wrap_apparmor_sb_mount),
+ 	LSM_HOOK_INIT(sb_umount, apparmor_sb_umount),
+-	LSM_HOOK_INIT(sb_pivotroot, apparmor_sb_pivotroot),
+-
+-	LSM_HOOK_INIT(path_link, apparmor_path_link),
+-	LSM_HOOK_INIT(path_unlink, apparmor_path_unlink),
+-	LSM_HOOK_INIT(path_symlink, apparmor_path_symlink),
+-	LSM_HOOK_INIT(path_mkdir, apparmor_path_mkdir),
+-	LSM_HOOK_INIT(path_rmdir, apparmor_path_rmdir),
+-	LSM_HOOK_INIT(path_mknod, apparmor_path_mknod),
+-	LSM_HOOK_INIT(path_rename, apparmor_path_rename),
+-	LSM_HOOK_INIT(path_chmod, apparmor_path_chmod),
+-	LSM_HOOK_INIT(path_chown, apparmor_path_chown),
+-	LSM_HOOK_INIT(path_truncate, apparmor_path_truncate),
++	LSM_HOOK_INIT(sb_pivotroot, wrap_apparmor_sb_pivotroot),
++
++	LSM_HOOK_INIT(path_link, wrap_apparmor_path_link),
++	LSM_HOOK_INIT(path_unlink, wrap_apparmor_path_unlink),
++	LSM_HOOK_INIT(path_symlink, wrap_apparmor_path_symlink),
++	LSM_HOOK_INIT(path_mkdir, wrap_apparmor_path_mkdir),
++	LSM_HOOK_INIT(path_rmdir, wrap_apparmor_path_rmdir),
++	LSM_HOOK_INIT(path_mknod, wrap_apparmor_path_mknod),
++	LSM_HOOK_INIT(path_rename, wrap_apparmor_path_rename),
++	LSM_HOOK_INIT(path_chmod, wrap_apparmor_path_chmod),
++	LSM_HOOK_INIT(path_chown, wrap_apparmor_path_chown),
++	LSM_HOOK_INIT(path_truncate, wrap_apparmor_path_truncate),
+ 	LSM_HOOK_INIT(inode_getattr, apparmor_inode_getattr),
+ 
+ 	LSM_HOOK_INIT(file_open, apparmor_file_open),
+@@ -1290,9 +1338,11 @@ enum profile_mode aa_g_profile_mode = APPARMOR_ENFORCE;
+ module_param_call(mode, param_set_mode, param_get_mode,
+ 		  &aa_g_profile_mode, S_IRUGO | S_IWUSR);
+ 
++#ifdef CONFIG_SECURITY_APPARMOR_HASH
+ /* whether policy verification hashing is enabled */
+-bool aa_g_hash_policy = CONFIG_SECURITY_APPARMOR_HASH_DEFAULT;
+-module_param_named(hash_policy, aa_g_hash_policy, aabool, S_IRUGO | S_IWUSR);
++bool aa_g_hash_policy = IS_ENABLED(CONFIG_SECURITY_APPARMOR_HASH_DEFAULT);
++module_param_named(hash_policy, aa_g_hash_policy, aabool, S_IRUSR | S_IWUSR);
++#endif
+ 
+ /* Debug mode */
+ bool aa_g_debug;
+@@ -1356,14 +1406,14 @@ __setup("apparmor=", apparmor_enabled_setup);
+ /* set global flag turning off the ability to load policy */
+ static int param_set_aalockpolicy(const char *val, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	return param_set_bool(val, kp);
+ }
+ 
+ static int param_get_aalockpolicy(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1372,7 +1422,7 @@ static int param_get_aalockpolicy(char *buffer, const struct kernel_param *kp)
+ 
+ static int param_set_aabool(const char *val, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1381,7 +1431,7 @@ static int param_set_aabool(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_aabool(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1390,7 +1440,7 @@ static int param_get_aabool(char *buffer, const struct kernel_param *kp)
+ 
+ static int param_set_aauint(const char *val, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1399,7 +1449,7 @@ static int param_set_aauint(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_aauint(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1408,7 +1458,7 @@ static int param_get_aauint(char *buffer, const struct kernel_param *kp)
+ 
+ static int param_get_audit(char *buffer, struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1418,7 +1468,7 @@ static int param_get_audit(char *buffer, struct kernel_param *kp)
+ static int param_set_audit(const char *val, struct kernel_param *kp)
+ {
+ 	int i;
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1437,7 +1487,7 @@ static int param_set_audit(const char *val, struct kernel_param *kp)
+ 
+ static int param_get_mode(char *buffer, struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1448,7 +1498,7 @@ static int param_get_mode(char *buffer, struct kernel_param *kp)
+ static int param_set_mode(const char *val, struct kernel_param *kp)
+ {
+ 	int i;
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1535,7 +1585,7 @@ static int __init alloc_buffers(void)
+ static int apparmor_dointvec(struct ctl_table *table, int write,
+ 			     void __user *buffer, size_t *lenp, loff_t *ppos)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+diff --git a/security/apparmor/match.c b/security/apparmor/match.c
+index 4a422640f975..8f0806b35a75 100644
+--- a/security/apparmor/match.c
++++ b/security/apparmor/match.c
+@@ -90,7 +90,9 @@ static struct table_header *unpack_table(char *blob, size_t bsize)
+ 
+ 	table = kvzalloc(tsize);
+ 	if (table) {
+-		*table = th;
++		table->td_id = th.td_id;
++		table->td_flags = th.td_flags;
++		table->td_lolen = th.td_lolen;
+ 		if (th.td_flags == YYTD_DATA8)
+ 			UNPACK_ARRAY(table->td_data, blob, th.td_lolen,
+ 				     u8, byte_to_byte);
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index b380e32a6077..907d3f0a0278 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -292,30 +292,54 @@ static int do_match_mnt(struct aa_dfa *dfa, unsigned int start,
+ 	return 4;
+ }
+ 
++
++static int path_flags(struct aa_profile *profile, const struct path *path)
++{
++	AA_BUG(!profile);
++	AA_BUG(!path);
++
++	return profile->path_flags |
++		(S_ISDIR(path->dentry->d_inode->i_mode) ? PATH_IS_DIR : 0);
++}
++
+ /**
+- * match_mnt - handle path matching for mount
++ * match_mnt_path_str - handle path matching for mount
+  * @profile: the confining profile
+- * @mntpnt: string for the mntpnt (NOT NULL)
+- * @devname: string for the devname/src_name (MAYBE NULL)
++ * @mntpath: for the mntpnt (NOT NULL)
++ * @buffer: buffer to be used to lookup mntpath
++ * @devnme: string for the devname/src_name (MAY BE NULL OR ERRPTR)
+  * @type: string for the dev type (MAYBE NULL)
+  * @flags: mount flags to match
+  * @data: fs mount data (MAYBE NULL)
+  * @binary: whether @data is binary
+- * @perms: Returns: permission found by the match
+- * @info: Returns: infomation string about the match for logging
++ * @devinfo: error str if (IS_ERR(@devname))
+  *
+  * Returns: 0 on success else error
+  */
+-static int match_mnt(struct aa_profile *profile, const char *mntpnt,
+-		     const char *devname, const char *type,
+-		     unsigned long flags, void *data, bool binary)
++static int match_mnt_path_str(struct aa_profile *profile, const struct path *mntpath,
++			      char *buffer, const char *devname,
++			      const char *type, unsigned long flags,
++			      void *data, bool binary, const char *devinfo)
+ {
+ 	struct aa_perms perms = { };
+-	const char *info = NULL;
+-	int pos, error = -EACCES;
++	const char *mntpnt = NULL, *info = NULL;
++	int pos, error;
+ 
+ 	AA_BUG(!profile);
++	AA_BUG(!mntpath);
++	AA_BUG(!buffer);
++
++	error = aa_path_name(mntpath, path_flags(profile, mntpath), buffer,
++			     &mntpnt, &info, profile->disconnected);
++	if (error)
++		goto audit;
++	if (IS_ERR(devname)) {
++		error = PTR_ERR(devname);
++		info = devinfo;
++		goto audit;
++	}
+ 
++	error = -EACCES;
+ 	pos = do_match_mnt(profile->policy.dfa,
+ 			   profile->policy.start[AA_CLASS_MOUNT],
+ 			   mntpnt, devname, type, flags, data, binary, &perms);
+@@ -330,20 +354,47 @@ audit:
+ 			   flags, data, AA_MAY_MOUNT, &perms, info, error);
+ }
+ 
+-static int path_flags(struct aa_profile *profile, struct path *path)
++/**
++ * match_mnt - handle path matching for mount
++ * @profile: the confining profile
++ * @mntpath: for the mntpnt (NOT NULL)
++ * @buffer: buffer to be used to lookup mntpath
++ * @devpath: path devname/src_name (MAYBE NULL)
++ * @devbuffer: buffer to be used to lookup devname/src_name
++ * @type: string for the dev type (MAYBE NULL)
++ * @flags: mount flags to match
++ * @data: fs mount data (MAYBE NULL)
++ * @binary: whether @data is binary
++ *
++ * Returns: 0 on success else error
++ */
++static int match_mnt(struct aa_profile *profile, const struct path *path,
++		     char *buffer, struct path *devpath, char *devbuffer,
++		     const char *type, unsigned long flags, void *data,
++		     bool binary)
+ {
++	const char *devname = NULL, *info = NULL;
++	int error = -EACCES;
++
+ 	AA_BUG(!profile);
+-	AA_BUG(!path);
++	AA_BUG(devpath && !devbuffer);
+ 
+-	return profile->path_flags |
+-		(S_ISDIR(path->dentry->d_inode->i_mode) ? PATH_IS_DIR : 0);
++	if (devpath) {
++		error = aa_path_name(devpath, path_flags(profile, devpath),
++				     devbuffer, &devname, &info,
++				     profile->disconnected);
++		if (error)
++			devname = ERR_PTR(error);
++	}
++
++	return match_mnt_path_str(profile, path, buffer, devname, type, flags,
++				  data, binary, info);
+ }
+ 
+-int aa_remount(struct aa_label *label, struct path *path, unsigned long flags,
+-	       void *data)
++int aa_remount(struct aa_label *label, const struct path *path,
++	       unsigned long flags, void *data)
+ {
+ 	struct aa_profile *profile;
+-	const char *name, *info = NULL;
+ 	char *buffer = NULL;
+ 	bool binary;
+ 	int error;
+@@ -354,32 +405,19 @@ int aa_remount(struct aa_label *label, struct path *path, unsigned long flags,
+ 	binary = path->dentry->d_sb->s_type->fs_flags & FS_BINARY_MOUNTDATA;
+ 
+ 	get_buffers(buffer);
+-	error = aa_path_name(path, path_flags(labels_profile(label), path),
+-			     buffer, &name, &info,
+-			     labels_profile(label)->disconnected);
+-	if (error) {
+-		error = audit_mount(labels_profile(label), OP_MOUNT, name, NULL,
+-				    NULL, NULL, flags, data, AA_MAY_MOUNT,
+-				    &nullperms, info, error);
+-		goto out;
+-	}
+-
+ 	error = fn_for_each_confined(label, profile,
+-			match_mnt(profile, name, NULL, NULL, flags, data,
+-				  binary));
+-
+-out:
++			match_mnt(profile, path, buffer, NULL, NULL, NULL,
++				  flags, data, binary));
+ 	put_buffers(buffer);
+ 
+ 	return error;
+ }
+ 
+-int aa_bind_mount(struct aa_label *label, struct path *path,
++int aa_bind_mount(struct aa_label *label, const struct path *path,
+ 		  const char *dev_name, unsigned long flags)
+ {
+ 	struct aa_profile *profile;
+ 	char *buffer = NULL, *old_buffer = NULL;
+-	const char *name, *old_name = NULL, *info = NULL;
+ 	struct path old_path;
+ 	int error;
+ 
+@@ -396,42 +434,20 @@ int aa_bind_mount(struct aa_label *label, struct path *path,
+ 		return error;
+ 
+ 	get_buffers(buffer, old_buffer);
+-	error = aa_path_name(path, path_flags(labels_profile(label), path), buffer, &name,
+-			     &info, labels_profile(label)->disconnected);
+-	if (error)
+-		goto error;
+-
+-	error = aa_path_name(&old_path, path_flags(labels_profile(label),
+-						   &old_path),
+-			     old_buffer, &old_name, &info,
+-			     labels_profile(label)->disconnected);
+-	path_put(&old_path);
+-	if (error)
+-		goto error;
+-
+ 	error = fn_for_each_confined(label, profile,
+-			match_mnt(profile, name, old_name, NULL, flags, NULL,
+-				  false));
+-
+-out:
++			match_mnt(profile, path, buffer, &old_path, old_buffer,
++				  NULL, flags, NULL, false));
+ 	put_buffers(buffer, old_buffer);
++	path_put(&old_path);
+ 
+ 	return error;
+-
+-error:
+-	error = fn_for_each(label, profile,
+-			audit_mount(profile, OP_MOUNT, name, old_name, NULL,
+-				    NULL, flags, NULL, AA_MAY_MOUNT, &nullperms,
+-				    info, error));
+-	goto out;
+ }
+ 
+-int aa_mount_change_type(struct aa_label *label, struct path *path,
++int aa_mount_change_type(struct aa_label *label, const struct path *path,
+ 			 unsigned long flags)
+ {
+ 	struct aa_profile *profile;
+ 	char *buffer = NULL;
+-	const char *name, *info = NULL;
+ 	int error;
+ 
+ 	AA_BUG(!label);
+@@ -442,34 +458,19 @@ int aa_mount_change_type(struct aa_label *label, struct path *path,
+ 		  MS_UNBINDABLE);
+ 
+ 	get_buffers(buffer);
+-	error = aa_path_name(path, path_flags(labels_profile(label), path),
+-			     buffer, &name, &info,
+-			     labels_profile(label)->disconnected);
+-	if (error) {
+-		error = fn_for_each(label, profile,
+-				audit_mount(profile, OP_MOUNT, name, NULL,
+-					    NULL, NULL, flags, NULL,
+-					    AA_MAY_MOUNT, &nullperms, info,
+-					    error));
+-		goto out;
+-	}
+-
+ 	error = fn_for_each_confined(label, profile,
+-			match_mnt(profile, name, NULL, NULL, flags, NULL,
+-				  false));
+-
+-out:
++			match_mnt(profile, path, buffer, NULL, NULL, NULL,
++				  flags, NULL, false));
+ 	put_buffers(buffer);
+ 
+ 	return error;
+ }
+ 
+-int aa_move_mount(struct aa_label *label, struct path *path,
++int aa_move_mount(struct aa_label *label, const struct path *path,
+ 		  const char *orig_name)
+ {
+ 	struct aa_profile *profile;
+ 	char *buffer = NULL, *old_buffer = NULL;
+-	const char *name, *old_name = NULL, *info = NULL;
+ 	struct path old_path;
+ 	int error;
+ 
+@@ -484,53 +485,29 @@ int aa_move_mount(struct aa_label *label, struct path *path,
+ 		return error;
+ 
+ 	get_buffers(buffer, old_buffer);
+-	error = aa_path_name(path, path_flags(labels_profile(label), path),
+-			     buffer, &name, &info,
+-			     labels_profile(label)->disconnected);
+-	if (error)
+-		goto error;
+-
+-	error = aa_path_name(&old_path, path_flags(labels_profile(label),
+-						   &old_path),
+-			     old_buffer, &old_name, &info,
+-			     labels_profile(label)->disconnected);
+-	path_put(&old_path);
+-	if (error)
+-		goto error;
+-
+ 	error = fn_for_each_confined(label, profile,
+-			match_mnt(profile, name, old_name, NULL, MS_MOVE, NULL,
+-				  false));
+-
+-out:
++			match_mnt(profile, path, buffer, &old_path, old_buffer,
++				  NULL, MS_MOVE, NULL, false));
+ 	put_buffers(buffer, old_buffer);
++	path_put(&old_path);
+ 
+ 	return error;
+-
+-error:
+-	error = fn_for_each(label, profile,
+-			audit_mount(profile, OP_MOUNT, name, old_name, NULL,
+-				    NULL, MS_MOVE, NULL, AA_MAY_MOUNT,
+-				    &nullperms, info, error));
+-	goto out;
+ }
+ 
+-int aa_new_mount(struct aa_label *label, const char *orig_dev_name,
+-		 struct path *path, const char *type, unsigned long flags,
++int aa_new_mount(struct aa_label *label, const char *dev_name,
++		 const struct path *path, const char *type, unsigned long flags,
+ 		 void *data)
+ {
+ 	struct aa_profile *profile;
+ 	char *buffer = NULL, *dev_buffer = NULL;
+-	const char *name = NULL, *dev_name = NULL, *info = NULL;
+ 	bool binary = true;
+ 	int error;
+ 	int requires_dev = 0;
+-	struct path dev_path;
++	struct path tmp_path, *dev_path = NULL;
+ 
+ 	AA_BUG(!label);
+ 	AA_BUG(!path);
+ 
+-	dev_name = orig_dev_name;
+ 	if (type) {
+ 		struct file_system_type *fstype;
+ 		fstype = get_fs_type(type);
+@@ -544,73 +521,62 @@ int aa_new_mount(struct aa_label *label, const char *orig_dev_name,
+ 			if (!dev_name || !*dev_name)
+ 				return -ENOENT;
+ 
+-			error = kern_path(dev_name, LOOKUP_FOLLOW, &dev_path);
++			error = kern_path(dev_name, LOOKUP_FOLLOW, &tmp_path);
+ 			if (error)
+ 				return error;
++			dev_path = &tmp_path;
+ 		}
+ 	}
+ 
+ 	get_buffers(buffer, dev_buffer);
+-	if (type && requires_dev) {
+-		error = aa_path_name(&dev_path,
+-				     path_flags(labels_profile(label),
+-						&dev_path),
+-				     dev_buffer, &dev_name, &info,
+-				     labels_profile(label)->disconnected);
+-		path_put(&dev_path);
+-		if (error)
+-			goto error;
++	if (dev_path) {
++		error = fn_for_each_confined(label, profile,
++			match_mnt(profile, path, buffer, dev_path, dev_buffer,
++				  type, flags, data, binary));
++	} else {
++		error = fn_for_each_confined(label, profile,
++			match_mnt_path_str(profile, path, buffer, dev_name,
++					   type, flags, data, binary, NULL));
+ 	}
+-
+-	error = aa_path_name(path, path_flags(labels_profile(label), path),
+-			     buffer, &name, &info,
+-			     labels_profile(label)->disconnected);
+-	if (error)
+-		goto error;
+-
+-	error = fn_for_each_confined(label, profile,
+-			match_mnt(profile, name, dev_name, type, flags, data,
+-				  binary));
+-
+-cleanup:
+ 	put_buffers(buffer, dev_buffer);
++	if (dev_path)
++		path_put(dev_path);
+ 
+ 	return error;
+-
+-error:
+-	error = fn_for_each(label, profile,
+-			audit_mount(labels_profile(label), OP_MOUNT, name,
+-				    dev_name, type, NULL, flags, data,
+-				    AA_MAY_MOUNT, &nullperms, info, error));
+-	goto cleanup;
+ }
+ 
+-static int profile_umount(struct aa_profile *profile, const char *name)
++static int profile_umount(struct aa_profile *profile, struct path *path,
++			  char *buffer)
+ {
+ 	struct aa_perms perms = { };
+-	const char *info = NULL;
++	const char *name = NULL, *info = NULL;
+ 	unsigned int state;
+-	int e = 0;
++	int error;
+ 
+ 	AA_BUG(!profile);
+-	AA_BUG(!name);
++	AA_BUG(!path);
++
++	error = aa_path_name(path, path_flags(profile, path), buffer, &name,
++			     &info, profile->disconnected);
++	if (error)
++		goto audit;
+ 
+ 	state = aa_dfa_match(profile->policy.dfa,
+ 			     profile->policy.start[AA_CLASS_MOUNT],
+ 			     name);
+ 	perms = compute_mnt_perms(profile->policy.dfa, state);
+ 	if (AA_MAY_UMOUNT & ~perms.allow)
+-		e = -EACCES;
++		error = -EACCES;
+ 
++audit:
+ 	return audit_mount(profile, OP_UMOUNT, name, NULL, NULL, NULL, 0, NULL,
+-			   AA_MAY_UMOUNT, &perms, info, e);
++			   AA_MAY_UMOUNT, &perms, info, error);
+ }
+ 
+ int aa_umount(struct aa_label *label, struct vfsmount *mnt, int flags)
+ {
+ 	struct aa_profile *profile;
+ 	char *buffer = NULL;
+-	const char *name, *info = NULL;
+ 	int error;
+ 	struct path path = { mnt, mnt->mnt_root };
+ 
+@@ -618,44 +584,49 @@ int aa_umount(struct aa_label *label, struct vfsmount *mnt, int flags)
+ 	AA_BUG(!mnt);
+ 
+ 	get_buffers(buffer);
+-	error = aa_path_name(&path, path_flags(labels_profile(label), &path),
+-			     buffer, &name, &info,
+-			     labels_profile(label)->disconnected);
+-	if (error) {
+-		error = fn_for_each(label, profile,
+-				audit_mount(profile, OP_UMOUNT, name, NULL,
+-					    NULL, NULL, 0, NULL, AA_MAY_UMOUNT,
+-					    &nullperms, info, error));
+-		goto out;
+-	}
+-
+ 	error = fn_for_each_confined(label, profile,
+-			profile_umount(profile, name));
+-
+-out:
++			profile_umount(profile, &path, buffer));
+ 	put_buffers(buffer);
+ 
+ 	return error;
+ }
+ 
+-static int profile_pivotroot(struct aa_profile *profile, const char *new_name,
+-			     const char *old_name, struct aa_label **trans)
++/* helper fn for transition on pivotroot
++ *
++ * Returns: label for transition or ERR_PTR. Does not return NULL
++ */
++static struct aa_label *build_pivotroot(struct aa_profile *profile,
++					const struct path *new_path,
++					char *new_buffer,
++					const struct path *old_path,
++					char *old_buffer)
+ {
+-	struct aa_label *target = NULL;
++	const char *old_name, *new_name = NULL, *info = NULL;
+ 	const char *trans_name = NULL;
++	struct aa_label *target = NULL;
+ 	struct aa_perms perms = { };
+-	const char *info = NULL;
+ 	unsigned int state;
+-	int error = -EACCES;
++	int error;
+ 
+ 	AA_BUG(!profile);
+-	AA_BUG(!new_name);
+-	AA_BUG(!old_name);
+-	AA_BUG(!trans);
++	AA_BUG(!new_path);
++	AA_BUG(!old_path);
++
++	if (profile_unconfined(profile))
++		return aa_get_newest_label(&profile->label);
++
++	error = aa_path_name(old_path, path_flags(profile, old_path),
++			     old_buffer, &old_name, &info,
++			     profile->disconnected);
++	if (error)
++		goto audit;
++	error = aa_path_name(new_path, path_flags(profile, new_path),
++			     new_buffer, &new_name, &info,
++			     profile->disconnected);
++	if (error)
++		goto audit;
+ 
+-	/* TODO: actual domain transition computation for multiple
+-	 *  profiles
+-	 */
++	error = -EACCES;
+ 	state = aa_dfa_match(profile->policy.dfa,
+ 			     profile->policy.start[AA_CLASS_MOUNT],
+ 			     new_name);
+@@ -664,33 +635,34 @@ static int profile_pivotroot(struct aa_profile *profile, const char *new_name,
+ 	perms = compute_mnt_perms(profile->policy.dfa, state);
+ 
+ 	if (AA_MAY_PIVOTROOT & perms.allow) {
++		error = 0;
+ 		if ((perms.xindex & AA_X_TYPE_MASK) == AA_X_TABLE) {
+ 			target = x_table_lookup(profile, perms.xindex,
+ 						&trans_name);
+ 			if (!target)
+ 				error = -ENOENT;
+-			else
+-				*trans = target;
+-		} else
+-			error = 0;
++		}
+ 	}
+ 
++audit:
+ 	error = audit_mount(profile, OP_PIVOTROOT, new_name, old_name,
+ 			    NULL, trans_name, 0, NULL, AA_MAY_PIVOTROOT,
+ 			    &perms, info, error);
+-	if (!*trans)
++	if (error) {
+ 		aa_put_label(target);
++		return ERR_PTR(error);
++	} else if (target)
++		return target;
+ 
+-	return error;
++	return aa_get_newest_label(&profile->label);
+ }
+ 
+-int aa_pivotroot(struct aa_label *label, struct path *old_path,
+-		  struct path *new_path)
++int aa_pivotroot(struct aa_label *label, const struct path *old_path,
++		 const struct path *new_path)
+ {
+ 	struct aa_profile *profile;
+ 	struct aa_label *target = NULL;
+-	char *old_buffer = NULL, *new_buffer = NULL;
+-	const char *old_name, *new_name = NULL, *info = NULL;
++	char *old_buffer = NULL, *new_buffer = NULL, *info = NULL;
+ 	int error;
+ 
+ 	AA_BUG(!label);
+@@ -698,32 +670,33 @@ int aa_pivotroot(struct aa_label *label, struct path *old_path,
+ 	AA_BUG(!new_path);
+ 
+ 	get_buffers(old_buffer, new_buffer);
+-	error = aa_path_name(old_path, path_flags(labels_profile(label),
+-						  old_path),
+-			     old_buffer, &old_name, &info,
+-			     labels_profile(label)->disconnected);
+-	if (error)
+-		goto error;
+-	error = aa_path_name(new_path, path_flags(labels_profile(label),
+-						  new_path),
+-			     new_buffer, &new_name, &info,
+-			     labels_profile(label)->disconnected);
+-	if (error)
+-		goto error;
+-	error = fn_for_each(label, profile,
+-			profile_pivotroot(profile, new_name, old_name,
+-					  &target));
++	target = fn_label_build(label, profile, GFP_ATOMIC,
++			build_pivotroot(profile, new_path, new_buffer,
++					old_path, old_buffer));
++	if (!target) {
++		info = "label build failed";
++		error = -ENOMEM;
++		goto fail;
++	} else if (!IS_ERR(target)) {
++		error = aa_replace_current_label(target);
++		if (error) {
++			/* TODO: audit target */
++			aa_put_label(target);
++			goto out;
++		}
++	} else
++		/* already audited error */
++		error = PTR_ERR(target);
+ out:
+ 	put_buffers(old_buffer, new_buffer);
+ 
+-	if (target)
+-		error = aa_replace_current_label(target);
+-
+ 	return error;
+ 
+-error:
++fail:
++	/* TODO: add back in auditing of new_name and old_name */
+ 	error = fn_for_each(label, profile,
+-			audit_mount(profile, OP_PIVOTROOT, new_name, old_name,
++			audit_mount(profile, OP_PIVOTROOT, NULL /*new_name */,
++				    NULL /* old_name */,
+ 				    NULL, NULL,
+ 				    0, NULL, AA_MAY_PIVOTROOT, &nullperms, info,
+ 				    error));
+diff --git a/security/apparmor/path.c b/security/apparmor/path.c
+index 4d4549384bce..3061334e4370 100644
+--- a/security/apparmor/path.c
++++ b/security/apparmor/path.c
+@@ -49,8 +49,8 @@ static int prepend(char **buffer, int buflen, const char *str, int namelen)
+  *     of chroot) and specifically directed to connect paths to
+  *     namespace root.
+  */
+-static int disconnect(struct path *path, char *buf, char **name, int flags,
+-		      const char *disconnected)
++static int disconnect(const struct path *path, char *buf, char **name,
++		      int flags, const char *disconnected)
+ {
+ 	int error = 0;
+ 
+@@ -89,7 +89,7 @@ static int disconnect(struct path *path, char *buf, char **name, int flags,
+  *          When no error the path name is returned in @name which points to
+  *          to a position in @buf
+  */
+-static int d_namespace_path(struct path *path, char *buf, char **name,
++static int d_namespace_path(const struct path *path, char *buf, char **name,
+ 			    int flags, const char *disconnected)
+ {
+ 	char *res;
+@@ -162,7 +162,7 @@ static int d_namespace_path(struct path *path, char *buf, char **name,
+ 	 *    allocated.
+ 	 */
+ 	if (d_unlinked(path->dentry) && d_is_positive(path->dentry) &&
+-	    !(flags & PATH_MEDIATE_DELETED)) {
++	    !(flags & (PATH_MEDIATE_DELETED | PATH_DELEGATE_DELETED))) {
+ 			error = -ENOENT;
+ 			goto out;
+ 	}
+@@ -198,8 +198,8 @@ out:
+  *
+  * Returns: %0 else error code if could retrieve name
+  */
+-int aa_path_name(struct path *path, int flags, char *buffer, const char **name,
+-		 const char **info, const char *disconnected)
++int aa_path_name(const struct path *path, int flags, char *buffer,
++		 const char **name, const char **info, const char *disconnected)
+ {
+ 	char *str = NULL;
+ 	int error = d_namespace_path(path, buffer, &str, flags, disconnected);
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 47dfe65ee6f5..afa5984d91b8 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -87,10 +87,11 @@
+ #include "include/match.h"
+ #include "include/path.h"
+ #include "include/policy.h"
++#include "include/policy_ns.h"
+ #include "include/policy_unpack.h"
+ #include "include/resource.h"
+ 
+-int unprivileged_userns_apparmor_policy = 0;
++int unprivileged_userns_apparmor_policy = 1;
+ 
+ /* Note: mode names must be unique in the first character because of
+  *       modechrs used to print modes on compound labels on some interfaces
+@@ -102,6 +103,19 @@ const char *const aa_profile_mode_names[] = {
+ 	"unconfined",
+ };
+ 
++/**
++ * aa_free_data - free a data blob
++ * @ptr: data to free
++ * @arg: unused
++ */
++static void aa_free_data(void *ptr, void *arg)
++{
++	struct aa_data *data = ptr;
++
++	kzfree(data->data);
++	kzfree(data->key);
++	kzfree(data);
++}
+ 
+ /**
+  * __add_profile - add a profiles to list and label tree
+@@ -199,6 +213,8 @@ void __aa_profile_list_release(struct list_head *head)
+  */
+ void aa_free_profile(struct aa_profile *profile)
+ {
++	struct rhashtable *rht;
++
+ 	AA_DEBUG("%s(%p)\n", __func__, profile);
+ 
+ 	if (!profile)
+@@ -220,7 +236,16 @@ void aa_free_profile(struct aa_profile *profile)
+ 	aa_put_dfa(profile->xmatch);
+ 	aa_put_dfa(profile->policy.dfa);
+ 
++	if (profile->data) {
++		rht = profile->data;
++		profile->data = NULL;
++		rhashtable_free_and_destroy(rht, aa_free_data, NULL);
++		kzfree(rht);
++	}
++
+ 	kzfree(profile->hash);
++	aa_put_loaddata(profile->rawdata);
++
+ 	kzfree(profile);
+ }
+ 
+@@ -611,49 +636,49 @@ static int audit_policy(struct aa_label *label, const char *op,
+ 	aad(&sa)->info = info;
+ 	aad(&sa)->error = error;
+ 	aad(&sa)->label = label;
+-	
++
+ 	aa_audit_msg(AUDIT_APPARMOR_STATUS, &sa, audit_cb);
+ 
+ 	return error;
+ }
+ 
+-bool policy_view_capable(void)
++/**
++ * policy_view_capable - check if viewing policy in at @ns is allowed
++ * ns: namespace being viewed by current task (may be NULL)
++ * Returns: true if viewing policy is allowed
++ *
++ * If @ns is NULL then the namespace being viewed is assumed to be the
++ * tasks current namespace.
++ */
++bool policy_view_capable(struct aa_ns *ns)
+ {
+ 	struct user_namespace *user_ns = current_user_ns();
+-	struct aa_ns *ns = aa_get_current_ns();
++	struct aa_ns *view_ns = aa_get_current_ns();
++	bool root_in_user_ns = uid_eq(current_euid(), make_kuid(user_ns, 0)) ||
++			       in_egroup_p(make_kgid(user_ns, 0));
+ 	bool response = false;
++	if (!ns)
++		ns = view_ns;
+ 
+-	if (ns_capable(user_ns, CAP_MAC_ADMIN) &&
++	if (root_in_user_ns && aa_ns_visible(view_ns, ns, true) &&
+ 	    (user_ns == &init_user_ns ||
+ 	     (unprivileged_userns_apparmor_policy != 0 &&
+-	      user_ns->level == 1 && ns != root_ns)))
++	      user_ns->level == view_ns->level)))
+ 		response = true;
+-	aa_put_ns(ns);
++	aa_put_ns(view_ns);
+ 
+ 	return response;
+ }
+ 
+-bool policy_admin_capable(void)
+-{
+-	return policy_view_capable() && !aa_g_lock_policy;
+-}
+-
+-bool aa_may_open_profiles(void)
++bool policy_admin_capable(struct aa_ns *ns)
+ {
+ 	struct user_namespace *user_ns = current_user_ns();
+-	struct aa_ns *ns = aa_get_current_ns();
+-	bool root_in_user_ns = uid_eq(current_euid(), make_kuid(user_ns, 0)) ||
+-			       in_egroup_p(make_kgid(user_ns, 0));
+-	bool response = false;
++	bool capable = ns_capable(user_ns, CAP_MAC_ADMIN);
+ 
+-	if (root_in_user_ns &&
+-	    (user_ns == &init_user_ns ||
+-	     (unprivileged_userns_apparmor_policy != 0 &&
+-	      user_ns->level == 1 && ns != root_ns)))
+-		response = true;
+-	aa_put_ns(ns);
++	AA_DEBUG("cap_mac_admin? %d\n", capable);
++	AA_DEBUG("policy locked? %d\n", aa_g_lock_policy);
+ 
+-	return response;
++	return policy_view_capable(ns) && capable && !aa_g_lock_policy;
+ }
+ 
+ /**
+@@ -663,7 +688,7 @@ bool aa_may_open_profiles(void)
+  *
+  * Returns: 0 if the task is allowed to manipulate policy else error
+  */
+-int aa_may_manage_policy(struct aa_label *label, u32 mask)
++int aa_may_manage_policy(struct aa_label *label, struct aa_ns *ns, u32 mask)
+ {
+ 	const char *op;
+ 
+@@ -679,7 +704,7 @@ int aa_may_manage_policy(struct aa_label *label, u32 mask)
+ 		return audit_policy(label, op, NULL, NULL, "policy_locked",
+ 				    -EACCES);
+ 
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(ns))
+ 		return audit_policy(label, op, NULL, NULL, "not policy admin",
+ 				    -EACCES);
+ 
+@@ -825,10 +850,10 @@ static struct aa_profile *update_to_newest_parent(struct aa_profile *new)
+ 
+ /**
+  * aa_replace_profiles - replace profile(s) on the profile list
++ * @view: namespace load is viewed from
+  * @label: label that is attempting to load/replace policy
+  * @mask: permission mask
+  * @udata: serialized data stream  (NOT NULL)
+- * @size: size of the serialized data stream
+  *
+  * unpack and replace a profile on the profile list and uses of that profile
+  * by any aa_task_ctx.  If the profile does not exist on the profile list
+@@ -836,10 +861,10 @@ static struct aa_profile *update_to_newest_parent(struct aa_profile *new)
+  *
+  * Returns: size of data consumed else error code on failure.
+  */
+-ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+-			    size_t size)
++ssize_t aa_replace_profiles(struct aa_ns *view, struct aa_label *label,
++			    u32 mask, struct aa_loaddata *udata)
+ {
+-	const char *ns_name, *name = NULL, *info = NULL;
++	const char *ns_name, *info = NULL;
+ 	struct aa_ns *ns = NULL;
+ 	struct aa_load_ent *ent, *tmp;
+ 	const char *op = mask & AA_MAY_REPLACE_POLICY ? OP_PROF_REPL : OP_PROF_LOAD;
+@@ -848,7 +873,7 @@ ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+ 	LIST_HEAD(lh);
+ 
+ 	/* released below */
+-	error = aa_unpack(udata, size, &lh, &ns_name);
++	error = aa_unpack(udata, &lh, &ns_name);
+ 	if (error)
+ 		goto out;
+ 
+@@ -877,21 +902,22 @@ ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+ 			count++;
+ 	}
+ 	if (ns_name) {
+-		ns = aa_prepare_ns(labels_ns(label), ns_name);
+-		if (!ns) {
++		ns = aa_prepare_ns(view, ns_name);
++		if (IS_ERR(ns)) {
+ 			info = "failed to prepare namespace";
+-			error = -ENOMEM;
++			error = PTR_ERR(ns);
++			ns = NULL;
+ 			goto fail;
+ 		}
+ 	} else
+-		ns = aa_get_ns(labels_ns(label));
++		ns = aa_get_ns(view);
+ 
+ 	mutex_lock(&ns->lock);
+ 	/* setup parent and ns info */
+ 	list_for_each_entry(ent, &lh, list) {
+ 		struct aa_policy *policy;
+ 
+-		name = ent->new->base.hname;
++		ent->new->rawdata = aa_get_loaddata(udata);
+ 		error = __lookup_replace(ns, ent->new->base.hname,
+ 					 !(mask & AA_MAY_REPLACE_POLICY),
+ 					 &ent->old, &info);
+@@ -920,7 +946,6 @@ ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+ 			if (!p) {
+ 				error = -ENOENT;
+ 				info = "parent does not exist";
+-				name = ent->new->base.hname;
+ 				goto fail_lock;
+ 			}
+ 			rcu_assign_pointer(ent->new->parent, aa_get_profile(p));
+@@ -985,13 +1010,26 @@ out:
+ 
+ 	if (error)
+ 		return error;
+-	return size;
++	return udata->size;
+ 
+ fail_lock:
+ 	mutex_unlock(&ns->lock);
+-fail:
+-	error = audit_policy(label, op, ns_name, name, info, error);
+ 
++	/* audit cause of failure */
++	op = (!ent->old) ? OP_PROF_LOAD : OP_PROF_REPL;
++fail:
++	audit_policy(label, op, ns_name, ent->new->base.hname, info, error);
++	/* audit status that rest of profiles in the atomic set failed too */
++	info = "valid profile in failed atomic policy load";
++	list_for_each_entry(tmp, &lh, list) {
++		if (tmp == ent) {
++			info = "unchecked profile in failed atomic policy load";
++			/* skip entry that caused failure */
++			continue;
++		}
++		op = (!ent->old) ? OP_PROF_LOAD : OP_PROF_REPL;
++		audit_policy(label, op, ns_name, tmp->new->base.hname, info, error);
++	}
+ 	list_for_each_entry_safe(ent, tmp, &lh, list) {
+ 		list_del_init(&ent->list);
+ 		aa_load_ent_free(ent);
+@@ -1002,6 +1040,7 @@ fail:
+ 
+ /**
+  * aa_remove_profiles - remove profile(s) from the system
++ * @view: namespace the remove is being done from
+  * @label: label attempting to remove policy
+  * @fqname: name of the profile or namespace to remove  (NOT NULL)
+  * @size: size of the name
+@@ -1013,7 +1052,8 @@ fail:
+  *
+  * Returns: size of data consume else error code if fails
+  */
+-ssize_t aa_remove_profiles(struct aa_label *label, char *fqname, size_t size)
++ssize_t aa_remove_profiles(struct aa_ns *view, struct aa_label *label,
++			   char *fqname, size_t size)
+ {
+ 	struct aa_ns *root = NULL, *ns = NULL;
+ 	struct aa_profile *profile = NULL;
+@@ -1027,7 +1067,7 @@ ssize_t aa_remove_profiles(struct aa_label *label, char *fqname, size_t size)
+ 		goto fail;
+ 	}
+ 
+-	root = labels_ns(label);
++	root = view;
+ 
+ 	if (fqname[0] == ':') {
+ 		name = aa_split_fqname(fqname, &ns_name);
+diff --git a/security/apparmor/policy_ns.c b/security/apparmor/policy_ns.c
+index 19adb24d00a0..88043fcfad8e 100644
+--- a/security/apparmor/policy_ns.c
++++ b/security/apparmor/policy_ns.c
+@@ -147,21 +147,6 @@ void aa_free_ns(struct aa_ns *ns)
+ 	kzfree(ns);
+ }
+ 
+-/**
+- * __aa_findn_ns - find a namespace on a list by @name
+- * @head: list to search for namespace on  (NOT NULL)
+- * @name: name of namespace to look for  (NOT NULL)
+- * @n: length of @name
+- * Returns: unrefcounted namespace
+- *
+- * Requires: rcu_read_lock be held
+- */
+-static struct aa_ns *__aa_findn_ns(struct list_head *head, const char *name,
+-				   size_t n)
+-{
+-	return (struct aa_ns *)__policy_strn_find(head, name, n);
+-}
+-
+ /**
+  * aa_find_ns  -  look up a profile namespace on the namespace list
+  * @root: namespace to search in  (NOT NULL)
+@@ -199,43 +184,84 @@ struct aa_ns *aa_find_ns(struct aa_ns *root, const char *name)
+ 	return aa_findn_ns(root, name, strlen(name));
+ }
+ 
++static struct aa_ns *__aa_create_ns(struct aa_ns *parent, const char *name,
++				    struct dentry *dir)
++{
++	struct aa_ns *ns;
++	int error;
++
++	AA_BUG(!parent);
++	AA_BUG(!name);
++	AA_BUG(!mutex_is_locked(&parent->lock));
++
++	ns = alloc_ns(parent->base.hname, name);
++	if (!ns)
++		return NULL;
++	mutex_lock(&ns->lock);
++	error = __aa_fs_ns_mkdir(ns, ns_subns_dir(parent), name, dir);
++	if (error) {
++		AA_ERROR("Failed to create interface for ns %s\n",
++			 ns->base.name);
++		mutex_unlock(&ns->lock);
++		aa_free_ns(ns);
++		return ERR_PTR(error);
++	} else {
++		ns->parent = aa_get_ns(parent);
++		ns->level = parent->level + 1;
++		list_add_rcu(&ns->base.list, &parent->sub_ns);
++		/* add list ref */
++		aa_get_ns(ns);
++	}
++	mutex_unlock(&ns->lock);
++
++	return ns;
++}
++
++/**
++ * aa_create_ns - create an ns, fail if it already exists
++ * @parent: the parent of the namespace being created
++ * @name: the name of the namespace
++ * @dir: if not null the dir to put the ns entries in
++ *
++ * Returns: the a refcounted ns that has been add or an ERR_PTR
++ */
++struct aa_ns *aa_create_ns(struct aa_ns *parent, const char *name,
++			   struct dentry *dir)
++{
++	struct aa_ns *ns;
++
++	mutex_lock(&parent->lock);
++	/* try and find the specified ns */
++	/* released by caller */
++	ns = aa_get_ns(__aa_find_ns(&parent->sub_ns, name));
++	if (!ns)
++		ns = __aa_create_ns(parent, name, dir);
++	else
++		ns = ERR_PTR(-EEXIST);
++	mutex_unlock(&parent->lock);
++
++	/* return ref */
++	return ns;
++}
++
+ /**
+  * aa_prepare_ns - find an existing or create a new namespace of @name
+- * @root: ns to treat as root
++ * @parent: ns to treat as parent
+  * @name: the namespace to find or add  (NOT NULL)
+  *
+- * Returns: refcounted namespace or NULL if failed to create one
++ * Returns: refcounted namespace or PTR_ERR if failed to create one
+  */
+-struct aa_ns *aa_prepare_ns(struct aa_ns *root, const char *name)
++struct aa_ns *aa_prepare_ns(struct aa_ns *parent, const char *name)
+ {
+ 	struct aa_ns *ns;
+ 
+-	mutex_lock(&root->lock);
++	mutex_lock(&parent->lock);
+ 	/* try and find the specified ns and if it doesn't exist create it */
+ 	/* released by caller */
+-	ns = aa_get_ns(__aa_findn_ns(&root->sub_ns, name, strlen(name)));
+-	if (!ns) {
+-		ns = alloc_ns(root->base.hname, name);
+-		if (!ns)
+-			goto out;
+-		mutex_lock(&ns->lock);
+-		if (__aa_fs_ns_mkdir(ns, ns_subns_dir(root), name)) {
+-			AA_ERROR("Failed to create interface for ns %s\n",
+-				 ns->base.name);
+-			mutex_unlock(&ns->lock);
+-			aa_free_ns(ns);
+-			ns = NULL;
+-			goto out;
+-		}
+-		ns->parent = aa_get_ns(root);
+-		ns->level = root->level + 1;
+-		list_add_rcu(&ns->base.list, &root->sub_ns);
+-		/* add list ref */
+-		aa_get_ns(ns);
+-		mutex_unlock(&ns->lock);
+-	}
+-out:
+-	mutex_unlock(&root->lock);
++	ns = aa_get_ns(__aa_find_ns(&parent->sub_ns, name));
++	if (!ns)
++		ns = __aa_create_ns(parent, name, NULL);
++	mutex_unlock(&parent->lock);
+ 
+ 	/* return ref */
+ 	return ns;
+diff --git a/security/apparmor/policy_unpack.c b/security/apparmor/policy_unpack.c
+index acbcee4bb585..da7b81f63616 100644
+--- a/security/apparmor/policy_unpack.c
++++ b/security/apparmor/policy_unpack.c
+@@ -21,6 +21,7 @@
+ #include <linux/ctype.h>
+ #include <linux/errno.h>
+ #include <linux/string.h>
++#include <linux/jhash.h>
+ 
+ #include "include/apparmor.h"
+ #include "include/audit.h"
+@@ -124,6 +125,15 @@ static int audit_iface(struct aa_profile *new, const char *ns_name,
+ 	return aa_audit(AUDIT_APPARMOR_STATUS, profile, &sa, audit_cb);
+ }
+ 
++void aa_loaddata_kref(struct kref *kref)
++{
++	struct aa_loaddata *d = container_of(kref, struct aa_loaddata, count);
++	if (d) {
++		kzfree(d->hash);
++		kvfree(d);
++	}
++}
++
+ /* test if read will be in packed data bounds */
+ static bool inbounds(struct aa_ext *e, size_t size)
+ {
+@@ -495,6 +505,30 @@ fail:
+ 	return 0;
+ }
+ 
++static void *kvmemdup(const void *src, size_t len)
++{
++	void *p = kvmalloc(len);
++
++	if (p)
++		memcpy(p, src, len);
++	return p;
++}
++
++static u32 strhash(const void *data, u32 len, u32 seed)
++{
++	const char * const *key = data;
++
++	return jhash(*key, strlen(*key), seed);
++}
++
++static int datacmp(struct rhashtable_compare_arg *arg, const void *obj)
++{
++	const struct aa_data *data = obj;
++	const char * const *key = arg->key;
++
++	return strcmp(data->key, *key);
++}
++
+ /**
+  * unpack_profile - unpack a serialized profile
+  * @e: serialized data extent information (NOT NULL)
+@@ -507,6 +541,9 @@ static struct aa_profile *unpack_profile(struct aa_ext *e, char **ns_name)
+ 	const char *tmpname, *tmpns = NULL, *name = NULL;
+ 	const char *info = "failed to unpack profile";
+ 	size_t size = 0, ns_len;
++	struct rhashtable_params params = { 0 };
++	char *key = NULL;
++	struct aa_data *data;
+ 	int i, error = -EPROTO;
+ 	kernel_cap_t tmpcap;
+ 	u32 tmp;
+@@ -697,6 +734,45 @@ static struct aa_profile *unpack_profile(struct aa_ext *e, char **ns_name)
+ 	if (!unpack_trans_table(e, profile))
+ 		goto fail;
+ 
++	if (unpack_nameX(e, AA_STRUCT, "data")) {
++		profile->data = kzalloc(sizeof(*profile->data), GFP_KERNEL);
++		if (!profile->data)
++			goto fail;
++
++		params.nelem_hint = 3;
++		params.key_len = sizeof(void *);
++		params.key_offset = offsetof(struct aa_data, key);
++		params.head_offset = offsetof(struct aa_data, head);
++		params.hashfn = strhash;
++		params.obj_cmpfn = datacmp;
++
++		if (rhashtable_init(profile->data, &params))
++			goto fail;
++
++		while (unpack_strdup(e, &key, NULL)) {
++			data = kzalloc(sizeof(*data), GFP_KERNEL);
++			if (!data) {
++				kzfree(key);
++				goto fail;
++			}
++
++			data->key = key;
++			data->size = unpack_blob(e, &data->data, NULL);
++			data->data = kvmemdup(data->data, data->size);
++			if (data->size && !data->data) {
++				kzfree(data->key);
++				kzfree(data);
++				goto fail;
++			}
++
++			rhashtable_insert_fast(profile->data, &data->head,
++					       profile->data->p);
++		}
++
++		if (!unpack_nameX(e, AA_STRUCTEND, NULL))
++			goto fail;
++	}
++
+ 	if (!unpack_nameX(e, AA_STRUCTEND, NULL))
+ 		goto fail;
+ 
+@@ -827,7 +903,6 @@ struct aa_load_ent *aa_load_ent_alloc(void)
+ /**
+  * aa_unpack - unpack packed binary profile(s) data loaded from user space
+  * @udata: user data copied to kmem  (NOT NULL)
+- * @size: the size of the user data
+  * @lh: list to place unpacked profiles in a aa_repl_ws
+  * @ns: Returns namespace profile is in if specified else NULL (NOT NULL)
+  *
+@@ -837,15 +912,15 @@ struct aa_load_ent *aa_load_ent_alloc(void)
+  *
+  * Returns: profile(s) on @lh else error pointer if fails to unpack
+  */
+-int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns)
++int aa_unpack(struct aa_loaddata *udata, struct list_head *lh, const char **ns)
+ {
+ 	struct aa_load_ent *tmp, *ent;
+ 	struct aa_profile *profile = NULL;
+ 	int error;
+ 	struct aa_ext e = {
+-		.start = udata,
+-		.end = udata + size,
+-		.pos = udata,
++		.start = udata->data,
++		.end = udata->data + udata->size,
++		.pos = udata->data,
+ 	};
+ 
+ 	*ns = NULL;
+@@ -855,7 +930,6 @@ int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns)
+ 		error = verify_header(&e, e.pos == e.start, ns);
+ 		if (error)
+ 			goto fail;
+-
+ 		start = e.pos;
+ 		profile = unpack_profile(&e, &ns_name);
+ 		if (IS_ERR(profile)) {
+@@ -883,7 +957,15 @@ int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns)
+ 		ent->ns_name = ns_name;
+ 		list_add_tail(&ent->list, lh);
+ 	}
+-
++	udata->abi = e.version & K_ABI_MASK;
++	if (aa_g_hash_policy) {
++		udata->hash = aa_calc_hash(udata->data, udata->size);
++		if (IS_ERR(udata->hash)) {
++			error = PTR_ERR(udata->hash);
++			udata->hash = NULL;
++			goto fail;
++		}
++	}
+ 	return 0;
+ 
+ fail_profile:
+diff --git a/security/inode.c b/security/inode.c
+index 16622aef9bde..692b28403860 100644
+--- a/security/inode.c
++++ b/security/inode.c
+@@ -46,8 +46,42 @@ static struct file_system_type fs_type = {
+ 	.kill_sb =	kill_litter_super,
+ };
+ 
++int securityfs_pin_fs(void)
++{
++	return simple_pin_fs(&fs_type, &mount, &mount_count);
++}
++
++int __securityfs_setup_d_inode(struct inode *dir, struct dentry *dentry,
++			       umode_t mode, void *data,
++			       const struct file_operations *fops,
++			       const struct inode_operations *iops)
++{
++	bool is_dir = S_ISDIR(mode);
++	struct inode *inode = new_inode(dir->i_sb);
++	if (!inode)
++		return -ENOMEM;
++
++	inode->i_ino = get_next_ino();
++	inode->i_mode = mode;
++	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
++	inode->i_private = data;
++	if (is_dir) {
++		inode->i_op = iops ? iops : &simple_dir_inode_operations;
++		inode->i_fop = &simple_dir_operations;
++		inc_nlink(inode);
++		inc_nlink(dir);
++	} else {
++		inode->i_fop = fops;
++	}
++	d_instantiate(dentry, inode);
++	dget(dentry);
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(__securityfs_setup_d_inode);
++
+ /**
+- * securityfs_create_file - create a file in the securityfs filesystem
++ * securityfs_create_dentry - create a file/dir in the securityfs filesystem
+  *
+  * @name: a pointer to a string containing the name of the file to create.
+  * @mode: the permission that the file should have
+@@ -59,8 +93,10 @@ static struct file_system_type fs_type = {
+  *        the open() call.
+  * @fops: a pointer to a struct file_operations that should be used for
+  *        this file.
++ * @iops: a point to a struct of inode_operations that should be used for
++ *        this file/dir
+  *
+- * This is the basic "create a file" function for securityfs.  It allows for a
++ * This is the basic "create a xxx" function for securityfs.  It allows for a
+  * wide range of flexibility in creating a file, or a directory (if you
+  * want to create a directory, the securityfs_create_dir() function is
+  * recommended to be used instead).
+@@ -74,13 +110,14 @@ static struct file_system_type fs_type = {
+  * If securityfs is not enabled in the kernel, the value %-ENODEV is
+  * returned.
+  */
+-struct dentry *securityfs_create_file(const char *name, umode_t mode,
+-				   struct dentry *parent, void *data,
+-				   const struct file_operations *fops)
++struct dentry *securityfs_create_dentry(const char *name, umode_t mode,
++					struct dentry *parent, void *data,
++					const struct file_operations *fops,
++					const struct inode_operations *iops)
+ {
+ 	struct dentry *dentry;
+ 	int is_dir = S_ISDIR(mode);
+-	struct inode *dir, *inode;
++	struct inode *dir;
+ 	int error;
+ 
+ 	if (!is_dir) {
+@@ -109,26 +146,9 @@ struct dentry *securityfs_create_file(const char *name, umode_t mode,
+ 		goto out1;
+ 	}
+ 
+-	inode = new_inode(dir->i_sb);
+-	if (!inode) {
+-		error = -ENOMEM;
++	error = __securityfs_setup_d_inode(dir, dentry, mode, data, fops, iops);
++	if (error)
+ 		goto out1;
+-	}
+-
+-	inode->i_ino = get_next_ino();
+-	inode->i_mode = mode;
+-	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+-	inode->i_private = data;
+-	if (is_dir) {
+-		inode->i_op = &simple_dir_inode_operations;
+-		inode->i_fop = &simple_dir_operations;
+-		inc_nlink(inode);
+-		inc_nlink(dir);
+-	} else {
+-		inode->i_fop = fops;
+-	}
+-	d_instantiate(dentry, inode);
+-	dget(dentry);
+ 	mutex_unlock(&dir->i_mutex);
+ 	return dentry;
+ 
+@@ -140,6 +160,39 @@ out:
+ 	simple_release_fs(&mount, &mount_count);
+ 	return dentry;
+ }
++EXPORT_SYMBOL_GPL(securityfs_create_dentry);
++
++/**
++ * securityfs_create_file - create a file in the securityfs filesystem
++ *
++ * @name: a pointer to a string containing the name of the file to create.
++ * @mode: the permission that the file should have
++ * @parent: a pointer to the parent dentry for this file.  This should be a
++ *          directory dentry if set.  If this parameter is %NULL, then the
++ *          file will be created in the root of the securityfs filesystem.
++ * @data: a pointer to something that the caller will want to get to later
++ *        on.  The inode.i_private pointer will point to this value on
++ *        the open() call.
++ * @fops: a pointer to a struct file_operations that should be used for
++ *        this file.
++ *
++ * This function creates a file in securityfs with the given @name.
++ *
++ * This function returns a pointer to a dentry if it succeeds.  This
++ * pointer must be passed to the securityfs_remove() function when the file is
++ * to be removed (no automatic cleanup happens if your module is unloaded,
++ * you are responsible here).  If an error occurs, the function will return
++ * the error value (via ERR_PTR).
++ *
++ * If securityfs is not enabled in the kernel, the value %-ENODEV is
++ * returned.
++ */
++struct dentry *securityfs_create_file(const char *name, umode_t mode,
++                                     struct dentry *parent, void *data,
++                                     const struct file_operations *fops)
++{
++	return securityfs_create_dentry(name, mode, parent, data, fops, NULL);
++}
+ EXPORT_SYMBOL_GPL(securityfs_create_file);
+ 
+ /**
+-- 
+2.17.1
+

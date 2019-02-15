@@ -1,0 +1,44 @@
+From 8ffb9f182e95ea2569f96ee8d143585141c5df41 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 23 Aug 2016 02:05:46 -0700
+Subject: [PATCH 13/36] UBUNTU: SAUCE: apparmor: fix: don't check for
+ vmalloc_addr if kvzalloc() failed
+
+BugLink: http://bugs.launchpad.net/bugs/1615885
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Tim Gardner <tim.gardner@canonical.com>
+Signed-off-by: Kamal Mostafa <kamal@canonical.com>
+(cherry picked from commit 3647671fce44caca4a2e223ab7a5bdfd5ff41550)
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+---
+ security/apparmor/match.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/security/apparmor/match.c b/security/apparmor/match.c
+index 68e4a26c17d6..4a422640f975 100644
+--- a/security/apparmor/match.c
++++ b/security/apparmor/match.c
+@@ -102,14 +102,14 @@ static struct table_header *unpack_table(char *blob, size_t bsize)
+ 				     u32, be32_to_cpu);
+ 		else
+ 			goto fail;
++		/* if table was vmalloced make sure the page tables are synced
++		 * before it is used, as it goes live to all cpus.
++		 */
++		if (is_vmalloc_addr(table))
++			vm_unmap_aliases();
+ 	}
+ 
+ out:
+-	/* if table was vmalloced make sure the page tables are synced
+-	 * before it is used, as it goes live to all cpus.
+-	 */
+-	if (is_vmalloc_addr(table))
+-		vm_unmap_aliases();
+ 	return table;
+ fail:
+ 	kvfree(table);
+-- 
+2.17.1
+
