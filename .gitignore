@@ -1,5 +1,10 @@
-/parts/
-/prime/
-/stage/
-/snap/.snapcraft
-/jetson-tx1-kernel_*_arm64.snap
+/tx1/parts/
+/tx1/prime/
+/tx1/stage/
+/tx1/snap/.snapcraft
+/tx1/jetson-tx1-kernel_*_arm64.snap
+/tx2/parts/
+/tx2/prime/
+/tx2/stage/
+/tx2/snap/.snapcraft
+/tx2/jetson-tx2-kernel_*_arm64.snap
