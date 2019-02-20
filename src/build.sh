@@ -7,7 +7,7 @@ export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
 num_cpu=$(nproc)
 
 # Build kernel
-make tegra21_defconfig \
+make "$JETSON_KERNEL_CONFIG" \
      snappy/containers.config \
      snappy/generic.config \
      snappy/security.config \

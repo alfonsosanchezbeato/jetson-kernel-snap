@@ -10,7 +10,7 @@ architectures: [arm64]
 parts:
   kernel:
     plugin: nil
-    source: src
+    source: ../src
     override-pull: |
       snapcraftctl pull
       # Get kernel sources, which are distributed across different repos
@@ -19,7 +19,7 @@ parts:
       # Apply canonical patches - apparmor stuff essentially
       git am ../../../patch/*
     override-build: |
-      ./build.sh
+      JETSON_KERNEL_CONFIG=tegra21_defconfig ./build.sh
     build-packages:
       - lsb-release
       - bc

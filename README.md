@@ -1,11 +1,19 @@
 # jetson-kernel snap
 
 This repository contains the building recipe for a kernel snap for the
-Jetson TX1 device.
+Jetson TX1/TX2 devices.
 
 ## Build instructions
 
-If in the target machine:
+Depending on your target:
+
+`cd tx1`
+
+or
+
+`cd tx2`
+
+To build the snap, if in the target machine:
 
 `snapcraft`
 
