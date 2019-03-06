@@ -13,7 +13,7 @@ make "$JETSON_KERNEL_CONFIG" \
      snappy/security.config \
      snappy/snappy.config \
      snappy/systemd.config
-make -j"$num_cpu" zImage modules dtbs
+make -j"$num_cpu" Image modules dtbs
 
 # Copy around files to install folder, so they can be staged
 
@@ -24,8 +24,8 @@ mkdir "$SNAPCRAFT_PART_INSTALL"/dtbs
 cp arch/arm64/boot/dts/*.dtb "$SNAPCRAFT_PART_INSTALL"/dtbs
 
 KERNEL_RELEASE=$(ls -1 "$SNAPCRAFT_PART_INSTALL"/modules)
-cp arch/arm64/boot/zImage "$SNAPCRAFT_PART_INSTALL"/kernel.img
-ln "$SNAPCRAFT_PART_INSTALL"/kernel.img "$SNAPCRAFT_PART_INSTALL"/zImage-"$KERNEL_RELEASE"
+cp arch/arm64/boot/Image "$SNAPCRAFT_PART_INSTALL"/kernel.img
+ln "$SNAPCRAFT_PART_INSTALL"/kernel.img "$SNAPCRAFT_PART_INSTALL"/Image-"$KERNEL_RELEASE"
 cp System.map "$SNAPCRAFT_PART_INSTALL"/System.map-"$KERNEL_RELEASE"
 cp .config "$SNAPCRAFT_PART_INSTALL"/config-"$KERNEL_RELEASE"
 
