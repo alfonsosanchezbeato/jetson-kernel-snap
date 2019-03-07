@@ -31,3 +31,25 @@ parts:
       - squashfs-tools
       - curl
       - build-essential
+
+  firmware:
+    plugin: nil
+    override-build: |
+      set -xe
+      wget https://developer.nvidia.com/embedded/dlc/l4t-jetson-tx1-driver-package-28-2-ga -O Tegra210_Linux_R28.2.0_aarch64.tbz2
+      tar xf Tegra210_Linux_R28.2.0_aarch64.tbz2 Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2
+      tar xf Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2 lib/firmware/
+      cd lib; cp -r firmware/ "$SNAPCRAFT_PART_INSTALL"
+      mkdir -p "$SNAPCRAFT_PART_INSTALL"/firmware/gm20b
+      cd "$SNAPCRAFT_PART_INSTALL"/firmware/gm20b
+      ln -sf "../tegra21x/acr_ucode.bin" "acr_ucode.bin"
+      ln -sf "../tegra21x/gpmu_ucode.bin" "gpmu_ucode.bin"
+      ln -sf "../tegra21x/gpmu_ucode_desc.bin" "gpmu_ucode_desc.bin"
+      ln -sf "../tegra21x/gpmu_ucode_image.bin" "gpmu_ucode_image.bin"
+      ln -sf "../tegra21x/gpu2cde.bin" "gpu2cde.bin"
+      ln -sf "../tegra21x/NETB_img.bin" "NETB_img.bin"
+      ln -sf "../tegra21x/fecs_sig.bin" "fecs_sig.bin"
+      ln -sf "../tegra21x/pmu_sig.bin" "pmu_sig.bin"
+      ln -sf "../tegra21x/pmu_bl.bin" "pmu_bl.bin"
+      ln -sf "../tegra21x/fecs.bin" "fecs.bin"
+      ln -sf "../tegra21x/gpccs.bin" "gpccs.bin"
