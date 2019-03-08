@@ -32,6 +32,13 @@ parts:
       - curl
       - build-essential
 
+  initramfs:
+    after: [ kernel ]
+    plugin: nil
+    source: ../initramfs
+    override-build: |
+      find . | cpio --quiet -o -H newc | lzma >> "$SNAPCRAFT_STAGE"/initrd.img
+
   firmware:
     plugin: nil
     override-build: |
