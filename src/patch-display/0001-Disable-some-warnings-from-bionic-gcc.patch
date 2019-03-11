@@ -1,0 +1,24 @@
+From 8582eefd74b8c5c443d7d2bcac37fdcaaae0276b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Sun, 10 Mar 2019 19:41:43 +0100
+Subject: [PATCH] Disable some warnings from bionic gcc
+
+---
+ drivers/video/tegra/dc/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/video/tegra/dc/Makefile b/drivers/video/tegra/dc/Makefile
+index 9ff8f4d4..c2531cf5 100644
+--- a/drivers/video/tegra/dc/Makefile
++++ b/drivers/video/tegra/dc/Makefile
+@@ -1,5 +1,5 @@
+ GCOV_PROFILE := y
+-subdir-ccflags-y := -Werror
++subdir-ccflags-y := -Werror -Wno-error=int-in-bool-context
+ EXTRA_CFLAGS += -I../nvhost/drivers/video/tegra/host
+ EXTRA_CFLAGS += -Idrivers/video/tegra/host
+ ccflags-$(CONFIG_TRUSTED_LITTLE_KERNEL) += -I../../../../../kernel-4.4/security/tlk_driver/
+-- 
+2.17.1
+

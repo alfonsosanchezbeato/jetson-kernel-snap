@@ -1,0 +1,135 @@
+From 8e7efc364731e03c3cde9e069a14333e8a8e84f4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Sun, 10 Mar 2019 19:39:56 +0100
+Subject: [PATCH] Disable some warnings from bionic gcc
+
+---
+ arch/arm64/kernel/Makefile                      | 2 +-
+ drivers/clk/Makefile                            | 2 +-
+ drivers/gpio/Makefile                           | 2 +-
+ drivers/hid/Makefile                            | 2 +-
+ drivers/input/Makefile                          | 2 +-
+ drivers/media/platform/tegra/camera/vi/Makefile | 2 +-
+ drivers/platform/tegra/Makefile                 | 2 +-
+ drivers/spi/Makefile                            | 2 +-
+ drivers/usb/Makefile                            | 2 +-
+ 9 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/arch/arm64/kernel/Makefile b/arch/arm64/kernel/Makefile
+index d30f835c1979..641f814611d9 100644
+--- a/arch/arm64/kernel/Makefile
++++ b/arch/arm64/kernel/Makefile
+@@ -12,7 +12,7 @@ CFLAGS_REMOVE_ftrace.o = -pg
+ CFLAGS_REMOVE_insn.o = -pg
+ CFLAGS_REMOVE_return_address.o = -pg
+ 
+-subdir-ccflags-y	+= -Werror
++subdir-ccflags-y	+= -Werror -Wno-error=format-truncation
+ 
+ # Object file lists.
+ arm64-obj-y		:= debug-monitors.o entry.o irq.o fpsimd.o		\
+diff --git a/drivers/clk/Makefile b/drivers/clk/Makefile
+index 457f0563d5e7..26af77535060 100644
+--- a/drivers/clk/Makefile
++++ b/drivers/clk/Makefile
+@@ -1,4 +1,4 @@
+-subdir-ccflags-y += -Werror
++subdir-ccflags-y += -Werror -Wno-error=format-truncation -Wno-error=int-in-bool-context
+ 
+ # common clock types
+ obj-$(CONFIG_HAVE_CLK)		+= clk-devres.o
+diff --git a/drivers/gpio/Makefile b/drivers/gpio/Makefile
+index a51f884abaff..4a478b595d6a 100644
+--- a/drivers/gpio/Makefile
++++ b/drivers/gpio/Makefile
+@@ -1,7 +1,7 @@
+ # generic gpio support: platform drivers, dedicated expander chips, etc
+ 
+ ccflags-$(CONFIG_DEBUG_GPIO)	+= -DDEBUG
+-subdir-ccflags-y += -Werror
++subdir-ccflags-y += -Werror -Wno-error=format-truncation -Wno-error=format-overflow
+ 
+ obj-$(CONFIG_GPIO_DEVRES)	+= devres.o
+ obj-$(CONFIG_GPIOLIB)		+= gpiolib.o
+diff --git a/drivers/hid/Makefile b/drivers/hid/Makefile
+index 0c16dbd4bf67..814b54c05cf1 100644
+--- a/drivers/hid/Makefile
++++ b/drivers/hid/Makefile
+@@ -1,7 +1,7 @@
+ #
+ # Makefile for the HID driver
+ #
+-subdir-ccflags-y	+= -Werror
++subdir-ccflags-y	+= -Werror -Wno-error=format-truncation
+ hid-y			:= hid-core.o hid-input.o
+ hid-$(CONFIG_DEBUG_FS)		+= hid-debug.o
+ 
+diff --git a/drivers/input/Makefile b/drivers/input/Makefile
+index a0f9417c7ef3..b770ba8fd445 100644
+--- a/drivers/input/Makefile
++++ b/drivers/input/Makefile
+@@ -4,7 +4,7 @@
+ 
+ # Each configuration option enables a list of files.
+ 
+-subdir-ccflags-y += -Werror
++subdir-ccflags-y += -Werror -Wno-error=format-truncation
+ GCOV_PROFILE := y
+ 
+ ccflags-y += -Werror
+diff --git a/drivers/media/platform/tegra/camera/vi/Makefile b/drivers/media/platform/tegra/camera/vi/Makefile
+index 2c3564634ba3..85389e536307 100644
+--- a/drivers/media/platform/tegra/camera/vi/Makefile
++++ b/drivers/media/platform/tegra/camera/vi/Makefile
+@@ -3,7 +3,7 @@ ccflags-y += -I../nvhost/drivers/video/tegra/host
+ ccflags-y += -Idrivers/video/tegra/host
+ ccflags-y += -Idrivers/video/tegra/camera
+ ccflags-y += -Idrivers/media/platform/tegra
+-ccflags-y += -Werror
++ccflags-y += -Werror -Wno-error=format-truncation -Wno-error=memset-elt-size
+ 
+ ifeq ($(CONFIG_ARCH_TEGRA_18x_SOC),y)
+ ccflags-y += -I../t18x/drivers/video/tegra/host/
+diff --git a/drivers/platform/tegra/Makefile b/drivers/platform/tegra/Makefile
+index b974514da8f6..ba7efa065d79 100644
+--- a/drivers/platform/tegra/Makefile
++++ b/drivers/platform/tegra/Makefile
+@@ -5,7 +5,7 @@
+ 
+ GCOV_PROFILE := y
+ 
+-subdir-ccflags-y += -Werror
++subdir-ccflags-y += -Werror -Wno-error=format-truncation -Wno-error=format-overflow
+ subdir-ccflags-y += -I$(srctree)/drivers/platform/tegra/include \
+ 		    -I$(srctree)/../t18x/drivers/platform/tegra/ \
+ 		    -I$(srctree)/drivers/video/tegra/dc/panel/ \
+diff --git a/drivers/spi/Makefile b/drivers/spi/Makefile
+index ddcf3f7f5068..95fe50dd5b0a 100644
+--- a/drivers/spi/Makefile
++++ b/drivers/spi/Makefile
+@@ -3,7 +3,7 @@
+ #
+ 
+ ccflags-$(CONFIG_SPI_DEBUG) := -DDEBUG
+-subdir-ccflags-y += -Werror
++subdir-ccflags-y += -Werror -Wno-error=format-overflow
+ 
+ # small core, mostly translating board-specific
+ # config declarations into driver model code
+diff --git a/drivers/usb/Makefile b/drivers/usb/Makefile
+index 21f04214fba7..ed57588da867 100644
+--- a/drivers/usb/Makefile
++++ b/drivers/usb/Makefile
+@@ -4,7 +4,7 @@
+ 
+ # Object files in subdirectories
+ 
+-subdir-ccflags-y += -Werror
++subdir-ccflags-y += -Werror -Wno-error=format-overflow -Wno-error=format-truncation
+ obj-$(CONFIG_USB)		+= core/
+ obj-$(CONFIG_USB_SUPPORT)	+= phy/
+ 
+-- 
+2.17.1
+
