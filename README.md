@@ -5,7 +5,12 @@ Jetson TX1/TX2 devices.
 
 ## Build instructions
 
-Depending on your target:
+The recommended build environment is Ubuntu 18.04. To build, first
+install snapcraft:
+
+`snap install snapcraft`
+
+Then go to the right folder. Depending on your target:
 
 `cd tx1`
 
