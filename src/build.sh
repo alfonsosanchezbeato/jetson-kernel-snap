@@ -30,9 +30,11 @@ cp System.map "$SNAPCRAFT_PART_INSTALL"/System.map-"$KERNEL_RELEASE"
 cp .config "$SNAPCRAFT_PART_INSTALL"/config-"$KERNEL_RELEASE"
 
 # Get initramfs from core snap, which we need to download
-core_url=$(curl -s -H "X-Ubuntu-Series: 16" -H "X-Ubuntu-Architecture: arm64" \
-                "https://search.apps.ubuntu.com/api/v1/snaps/details/core?channel=stable" \
-               | jq -r ".anon_download_url")
+core_url=$(curl -s -H "Snap-Device-Series: 16" "https://api.snapcraft.io/v2/snaps/info/core" |
+               jq -r '.["channel-map"] |
+               map(select(.channel.name == "stable" and .channel.architecture == "arm64")) |
+               .[0] | .download.url')
+
 curl -L "$core_url" > core.snap
 # Glob so we get both link and regular file
 unsquashfs core.snap "boot/initrd.img-core*"
