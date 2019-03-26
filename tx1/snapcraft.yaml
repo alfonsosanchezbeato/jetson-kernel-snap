@@ -14,7 +14,7 @@ parts:
     override-pull: |
       snapcraftctl pull
       # Get kernel sources, which are distributed across different repos
-      ./source_sync.sh -k tegra-l4t-r28.2.1
+      ./l4t_28.2.0/source_sync.sh -k tegra-l4t-r28.2.1
       # Apply canonical patches - apparmor stuff essentially
       cd sources/kernel/display
       git am ../../../patch-display/*
