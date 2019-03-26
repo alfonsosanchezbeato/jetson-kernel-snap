@@ -1,6 +1,6 @@
 #!/bin/sh -ex
 
-cd sources/kernel/kernel-4.4
+cd sources/kernel/kernel-*
 
 export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
 
