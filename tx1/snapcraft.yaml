@@ -18,15 +18,16 @@ parts:
       ./source_sync.sh -k tegra-l4t-r28.2.1
       # Apply canonical patches - apparmor stuff essentially
       cd sources/kernel/display
-      git am ../../../patch-display/*
+      git am ../../../l4t_28.2.0/patch-display/*
       cd -
       cd sources/kernel/kernel-4.4
-      git am ../../../patch/*
+      git am ../../../l4t_28.2.0/patch/*
     override-build: |
       JETSON_KERNEL_CONFIG=tegra21_defconfig ./build.sh
     build-packages:
       - lsb-release
       - bc
+      - git
       - libssl-dev
       - rsync
       - lzop
