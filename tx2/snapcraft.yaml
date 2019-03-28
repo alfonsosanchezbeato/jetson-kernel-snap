@@ -24,6 +24,7 @@ parts:
     build-packages:
       - lsb-release
       - bc
+      - git
       - libssl-dev
       - rsync
       - lzop
