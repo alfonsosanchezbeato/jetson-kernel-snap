@@ -37,13 +37,6 @@ parts:
       - curl
       - build-essential
 
-  initramfs:
-    after: [ kernel ]
-    plugin: nil
-    source: ../initramfs
-    override-build: |
-      find . | cpio --quiet -o -H newc | lzma >> "$SNAPCRAFT_STAGE"/initrd.img
-
   firmware:
     plugin: nil
     override-build: |
@@ -65,3 +58,12 @@ parts:
       ln -sf "../tegra21x/pmu_bl.bin" "pmu_bl.bin"
       ln -sf "../tegra21x/fecs.bin" "fecs.bin"
       ln -sf "../tegra21x/gpccs.bin" "gpccs.bin"
+
+  initramfs:
+    after: [ kernel, firmware ]
+    plugin: nil
+    source: ../initramfs
+    override-build: |
+      mkdir -p lib/firmware
+      cp "$SNAPCRAFT_STAGE"/firmware/tegra*_xusb_firmware lib/firmware/
+      find . | cpio --quiet -o -H newc | lzma >> "$SNAPCRAFT_STAGE"/initrd.img

@@ -34,13 +34,6 @@ parts:
       - curl
       - build-essential
 
-  initramfs:
-    after: [ kernel ]
-    plugin: nil
-    source: ../initramfs
-    override-build: |
-      find . | cpio --quiet -o -H newc | lzma >> "$SNAPCRAFT_STAGE"/initrd.img
-
   firmware:
     plugin: nil
     override-build: |
@@ -50,3 +43,12 @@ parts:
       tar xf JAX-TX2-Jetson_Linux_R32.1.0_aarch64.tbz2 Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2
       tar xf Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2 lib/firmware/
       cd lib; cp -r firmware/ "$SNAPCRAFT_PART_INSTALL"
+
+  initramfs:
+    after: [ kernel, firmware ]
+    plugin: nil
+    source: ../initramfs
+    override-build: |
+      mkdir -p lib/firmware
+      cp "$SNAPCRAFT_STAGE"/firmware/tegra*_xusb_firmware lib/firmware/
+      find . | cpio --quiet -o -H newc | lzma >> "$SNAPCRAFT_STAGE"/initrd.img
