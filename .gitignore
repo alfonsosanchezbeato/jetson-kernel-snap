@@ -8,3 +8,8 @@
 /tx2/stage/
 /tx2/snap/.snapcraft
 /tx2/jetson-tx2-kernel_*_arm64.snap
+/nano/parts/
+/nano/prime/
+/nano/stage/
+/nano/snap/.snapcraft
+/nano/jetson-nano-kernel_*_arm64.snap
