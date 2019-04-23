@@ -35,6 +35,7 @@ parts:
       - build-essential
 
   firmware:
+    after: [ kernel ]
     plugin: nil
     override-build: |
       set -xe
