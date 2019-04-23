@@ -1,0 +1,416 @@
+From 6b8f231b0e27d0228da0b37ea3deb2091144c1f8 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Thu, 22 Sep 2016 10:50:42 -0700
+Subject: [PATCH 33/57] apparmor: add mkdir/rmdir interface to manage policy
+ namespaces
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c         | 157 +++++++++++++++++++++----
+ security/apparmor/include/apparmorfs.h |   3 +-
+ security/apparmor/include/policy_ns.h  |  24 +++-
+ security/apparmor/policy.c             |   5 +-
+ security/apparmor/policy_ns.c          |  51 ++++----
+ 5 files changed, 184 insertions(+), 56 deletions(-)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index b11ce28aad53..f727e872d166 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -23,6 +23,7 @@
+ #include <linux/capability.h>
+ #include <linux/rcupdate.h>
+ #include <uapi/linux/major.h>
++#include <linux/fs.h>
+ 
+ #include "include/apparmor.h"
+ #include "include/apparmorfs.h"
+@@ -916,6 +917,88 @@ int __aa_fs_profile_mkdir(struct aa_profile *profile, struct dentry *parent)
+ 	return error;
+ }
+ 
++static int ns_mkdir_op(struct inode *dir, struct dentry *dentry, umode_t mode)
++{
++	struct aa_ns *ns, *parent;
++	/* TODO: improve permission check */
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = aa_may_manage_policy(label, AA_MAY_LOAD_POLICY);
++	aa_end_current_label(label);
++	if (error)
++		return error;
++
++	parent = aa_get_ns(dir->i_private);
++	AA_BUG(d_inode(ns_subns_dir(parent)) != dir);
++
++	/* we have to unlock and then relock to get locking order right
++	 * for pin_fs
++	 */
++	inode_unlock(dir);
++	securityfs_pin_fs();
++	inode_lock_nested(dir, I_MUTEX_PARENT);
++
++	error = __securityfs_setup_d_inode(dir, dentry, mode | S_IFDIR,  NULL,
++					   NULL, NULL);
++	if (error)
++		return error;
++
++	ns = aa_create_ns(parent, ACCESS_ONCE(dentry->d_name.name), dentry);
++	if (IS_ERR(ns)) {
++		error = PTR_ERR(ns);
++		ns = NULL;
++	}
++
++	aa_put_ns(ns);		/* list ref remains */
++	aa_put_ns(parent);
++
++	return error;
++}
++
++static int ns_rmdir_op(struct inode *dir, struct dentry *dentry)
++{
++	struct aa_ns *ns, *parent;
++	/* TODO: improve permission check */
++	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
++	int error = aa_may_manage_policy(label, AA_MAY_LOAD_POLICY);
++	aa_end_current_label(label);
++	if (error)
++		return error;
++
++	 parent = aa_get_ns(dir->i_private);
++	/* rmdir calls the generic securityfs functions to remove files
++	 * from the apparmor dir. It is up to the apparmor ns locking
++	 * to avoid races.
++	 */
++	inode_unlock(dir);
++	inode_unlock(dentry->d_inode);
++
++	mutex_lock(&parent->lock);
++	ns = aa_get_ns(__aa_findn_ns(&parent->sub_ns, dentry->d_name.name,
++				     dentry->d_name.len));
++	if (!ns) {
++		error = -ENOENT;
++		goto out;
++	}
++	AA_BUG(ns_dir(ns) != dentry);
++
++	__aa_remove_ns(ns);
++	aa_put_ns(ns);
++
++out:
++	mutex_unlock(&parent->lock);
++	inode_lock_nested(dir, I_MUTEX_PARENT);
++	inode_lock(dentry->d_inode);
++	aa_put_ns(parent);
++
++	return error;
++}
++
++static const struct inode_operations ns_dir_inode_operations = {
++	.lookup		= simple_lookup,
++	.mkdir		= ns_mkdir_op,
++	.rmdir		= ns_rmdir_op,
++};
++
+ /**
+  *
+  * Requires: @ns->lock held
+@@ -939,21 +1022,57 @@ void __aa_fs_ns_rmdir(struct aa_ns *ns)
+ 		mutex_unlock(&sub->lock);
+ 	}
+ 
++	if (ns_subns_dir(ns)) {
++		sub = d_inode(ns_subns_dir(ns))->i_private;
++		aa_put_ns(sub);
++	}
+ 	for (i = AAFS_NS_SIZEOF - 1; i >= 0; --i) {
+ 		securityfs_remove(ns->dents[i]);
+ 		ns->dents[i] = NULL;
+ 	}
+ }
+ 
++/* assumes cleanup in caller */
++static int __aa_fs_ns_mkdir_entries(struct aa_ns *ns, struct dentry *dir)
++{
++	struct dentry *dent;
++
++	AA_BUG(!ns);
++	AA_BUG(!dir);
++
++	dent = securityfs_create_dir("profiles", dir);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	ns_subprofs_dir(ns) = dent;
++
++	dent = securityfs_create_dir("raw_data", dir);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	ns_subdata_dir(ns) = dent;
++
++	/* use create_dentry so we can supply private data */
++	dent = securityfs_create_dentry("namespaces",
++					S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO,
++					dir, ns, NULL,
++					&ns_dir_inode_operations);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	aa_get_ns(ns);
++	ns_subns_dir(ns) = dent;
++
++	return 0;
++}
++
+ /**
+  *
+  * Requires: @ns->lock held
+  */
+-int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name)
++int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name,
++		     struct dentry *dent)
+ {
+ 	struct aa_ns *sub;
+ 	struct aa_profile *child;
+-	struct dentry *dent, *dir;
++	struct dentry *dir;
+ 	int error;
+ 
+ 	AA_BUG(!ns);
+@@ -963,35 +1082,29 @@ int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name)
+ 	if (!name)
+ 		name = ns->base.name;
+ 
+-	dent = securityfs_create_dir(name, parent);
+-	if (IS_ERR(dent))
+-		goto fail;
++	if (!dent) {
++		/* create ns dir if it doesn't already exist */
++		dent = securityfs_create_dir(name, parent);
++		if (IS_ERR(dent))
++			goto fail;
++	} else
++		dget(dent);
+ 	ns_dir(ns) = dir = dent;
++	error = __aa_fs_ns_mkdir_entries(ns, dir);
++	if (error)
++		goto fail2;
+ 
+-	dent = securityfs_create_dir("profiles", dir);
+-	if (IS_ERR(dent))
+-		goto fail;
+-	ns_subprofs_dir(ns) = dent;
+-
+-	dent = securityfs_create_dir("raw_data", dir);
+-	if (IS_ERR(dent))
+-		goto fail;
+-	ns_subdata_dir(ns) = dent;
+-
+-	dent = securityfs_create_dir("namespaces", dir);
+-	if (IS_ERR(dent))
+-		goto fail;
+-	ns_subns_dir(ns) = dent;
+-
++	/* profiles */
+ 	list_for_each_entry(child, &ns->base.profiles, base.list) {
+ 		error = __aa_fs_profile_mkdir(child, ns_subprofs_dir(ns));
+ 		if (error)
+ 			goto fail2;
+ 	}
+ 
++	/* subnamespaces */
+ 	list_for_each_entry(sub, &ns->sub_ns, base.list) {
+ 		mutex_lock(&sub->lock);
+-		error = __aa_fs_ns_mkdir(sub, ns_subns_dir(ns), NULL);
++		error = __aa_fs_ns_mkdir(sub, ns_subns_dir(ns), NULL, NULL);
+ 		mutex_unlock(&sub->lock);
+ 		if (error)
+ 			goto fail2;
+@@ -1503,7 +1616,7 @@ static int __init aa_create_aafs(void)
+ 		goto error;
+ 
+ 	mutex_lock(&root_ns->lock);
+-	error = __aa_fs_ns_mkdir(root_ns, aa_fs_entry.dentry, "policy");
++	error = __aa_fs_ns_mkdir(root_ns, aa_fs_entry.dentry, "policy", NULL);
+ 	mutex_unlock(&root_ns->lock);
+ 
+ 	if (error)
+diff --git a/security/apparmor/include/apparmorfs.h b/security/apparmor/include/apparmorfs.h
+index 15242413c053..077f5e2dbb86 100644
+--- a/security/apparmor/include/apparmorfs.h
++++ b/security/apparmor/include/apparmorfs.h
+@@ -105,6 +105,7 @@ void __aa_fs_profile_migrate_dents(struct aa_profile *old,
+ 				   struct aa_profile *new);
+ int __aa_fs_profile_mkdir(struct aa_profile *profile, struct dentry *parent);
+ void __aa_fs_ns_rmdir(struct aa_ns *ns);
+-int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name);
++int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name,
++		     struct dentry *dent);
+ 
+ #endif /* __AA_APPARMORFS_H */
+diff --git a/security/apparmor/include/policy_ns.h b/security/apparmor/include/policy_ns.h
+index 0325118b2793..4c16c9acdbcf 100644
+--- a/security/apparmor/include/policy_ns.h
++++ b/security/apparmor/include/policy_ns.h
+@@ -88,7 +88,8 @@ void aa_free_ns_kref(struct kref *kref);
+ 
+ struct aa_ns *aa_find_ns(struct aa_ns *root, const char *name);
+ struct aa_ns *aa_findn_ns(struct aa_ns *root, const char *name, size_t n);
+-struct aa_ns *aa_create_ns(struct aa_ns *parent, const char *name);
++struct aa_ns *aa_create_ns(struct aa_ns *parent, const char *name,
++			   struct dentry *dir);
+ struct aa_ns *aa_prepare_ns(struct aa_ns *root, const char *name);
+ void __aa_remove_ns(struct aa_ns *ns);
+ 
+@@ -125,4 +126,25 @@ static inline void aa_put_ns(struct aa_ns *ns)
+ 		aa_put_profile(ns->unconfined);
+ }
+ 
++/**
++ * __aa_findn_ns - find a namespace on a list by @name
++ * @head: list to search for namespace on  (NOT NULL)
++ * @name: name of namespace to look for  (NOT NULL)
++ * @n: length of @name
++ * Returns: unrefcounted namespace
++ *
++ * Requires: rcu_read_lock be held
++ */
++static inline struct aa_ns *__aa_findn_ns(struct list_head *head,
++					  const char *name, size_t n)
++{
++	return (struct aa_ns *)__policy_strn_find(head, name, n);
++}
++
++static inline struct aa_ns *__aa_find_ns(struct list_head *head,
++					 const char *name)
++{
++	return __aa_findn_ns(head, name, strlen(name));
++}
++
+ #endif /* AA_NAMESPACE_H */
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index fa85b7497bc0..3fd0bb45560a 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -891,9 +891,10 @@ ssize_t aa_replace_profiles(struct aa_label *label, u32 mask,
+ 	}
+ 	if (ns_name) {
+ 		ns = aa_prepare_ns(labels_ns(label), ns_name);
+-		if (!ns) {
++		if (IS_ERR(ns)) {
+ 			info = "failed to prepare namespace";
+-			error = -ENOMEM;
++			error = PTR_ERR(ns);
++			ns = NULL;
+ 			goto fail;
+ 		}
+ 	} else
+diff --git a/security/apparmor/policy_ns.c b/security/apparmor/policy_ns.c
+index 88092b42543b..88043fcfad8e 100644
+--- a/security/apparmor/policy_ns.c
++++ b/security/apparmor/policy_ns.c
+@@ -147,26 +147,6 @@ void aa_free_ns(struct aa_ns *ns)
+ 	kzfree(ns);
+ }
+ 
+-/**
+- * __aa_findn_ns - find a namespace on a list by @name
+- * @head: list to search for namespace on  (NOT NULL)
+- * @name: name of namespace to look for  (NOT NULL)
+- * @n: length of @name
+- * Returns: unrefcounted namespace
+- *
+- * Requires: rcu_read_lock be held
+- */
+-static struct aa_ns *__aa_findn_ns(struct list_head *head, const char *name,
+-				   size_t n)
+-{
+-	return (struct aa_ns *)__policy_strn_find(head, name, n);
+-}
+-
+-static struct aa_ns *__aa_find_ns(struct list_head *head, const char *name)
+-{
+-	return __aa_findn_ns(head, name, strlen(name));
+-}
+-
+ /**
+  * aa_find_ns  -  look up a profile namespace on the namespace list
+  * @root: namespace to search in  (NOT NULL)
+@@ -204,22 +184,27 @@ struct aa_ns *aa_find_ns(struct aa_ns *root, const char *name)
+ 	return aa_findn_ns(root, name, strlen(name));
+ }
+ 
+-static struct aa_ns *__aa_create_ns(struct aa_ns *parent, const char *name)
++static struct aa_ns *__aa_create_ns(struct aa_ns *parent, const char *name,
++				    struct dentry *dir)
+ {
+ 	struct aa_ns *ns;
++	int error;
+ 
++	AA_BUG(!parent);
++	AA_BUG(!name);
+ 	AA_BUG(!mutex_is_locked(&parent->lock));
+ 
+ 	ns = alloc_ns(parent->base.hname, name);
+ 	if (!ns)
+ 		return NULL;
+ 	mutex_lock(&ns->lock);
+-	if (__aa_fs_ns_mkdir(ns, ns_subns_dir(parent), name)) {
++	error = __aa_fs_ns_mkdir(ns, ns_subns_dir(parent), name, dir);
++	if (error) {
+ 		AA_ERROR("Failed to create interface for ns %s\n",
+ 			 ns->base.name);
+ 		mutex_unlock(&ns->lock);
+ 		aa_free_ns(ns);
+-		return ERR_PTR(-ENOMEM);
++		return ERR_PTR(error);
+ 	} else {
+ 		ns->parent = aa_get_ns(parent);
+ 		ns->level = parent->level + 1;
+@@ -232,7 +217,16 @@ static struct aa_ns *__aa_create_ns(struct aa_ns *parent, const char *name)
+ 	return ns;
+ }
+ 
+-struct aa_ns *aa_create_ns(struct aa_ns *parent, const char *name)
++/**
++ * aa_create_ns - create an ns, fail if it already exists
++ * @parent: the parent of the namespace being created
++ * @name: the name of the namespace
++ * @dir: if not null the dir to put the ns entries in
++ *
++ * Returns: the a refcounted ns that has been add or an ERR_PTR
++ */
++struct aa_ns *aa_create_ns(struct aa_ns *parent, const char *name,
++			   struct dentry *dir)
+ {
+ 	struct aa_ns *ns;
+ 
+@@ -241,14 +235,11 @@ struct aa_ns *aa_create_ns(struct aa_ns *parent, const char *name)
+ 	/* released by caller */
+ 	ns = aa_get_ns(__aa_find_ns(&parent->sub_ns, name));
+ 	if (!ns)
+-{
+-printk("apparmor creating ns %s\n", name);
+-		ns = __aa_create_ns(parent, name);
+-}
++		ns = __aa_create_ns(parent, name, dir);
+ 	else
+ 		ns = ERR_PTR(-EEXIST);
+ 	mutex_unlock(&parent->lock);
+-printk("apparmor unlocking parent ns\n");
++
+ 	/* return ref */
+ 	return ns;
+ }
+@@ -269,7 +260,7 @@ struct aa_ns *aa_prepare_ns(struct aa_ns *parent, const char *name)
+ 	/* released by caller */
+ 	ns = aa_get_ns(__aa_find_ns(&parent->sub_ns, name));
+ 	if (!ns)
+-		ns = __aa_create_ns(parent, name);
++		ns = __aa_create_ns(parent, name, NULL);
+ 	mutex_unlock(&parent->lock);
+ 
+ 	/* return ref */
+-- 
+2.17.1
+

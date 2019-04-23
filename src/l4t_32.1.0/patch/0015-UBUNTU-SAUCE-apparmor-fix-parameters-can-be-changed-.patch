@@ -1,0 +1,120 @@
+From c74e10c8db9118dbc2d84be7b683c378deccf87a Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 22 Jun 2016 18:01:08 -0700
+Subject: [PATCH 15/57] UBUNTU: SAUCE: apparmor: fix: parameters can be changed
+ after policy is locked
+
+the policy_lock parameter is a one way switch that prevents policy
+from being further modified. Unfortunately some of the module parameters
+can effectively modify policy by turning off enforcement.
+
+split policy_admin_capable into a view check and a full admin check,
+and update the admin check to test the policy_lock parameter.
+
+BugLink: http://bugs.launchpad.net/bugs/1615895
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/include/policy.h |  1 +
+ security/apparmor/lsm.c            | 12 +++++-------
+ security/apparmor/policy.c         |  7 ++++++-
+ 3 files changed, 12 insertions(+), 8 deletions(-)
+
+diff --git a/security/apparmor/include/policy.h b/security/apparmor/include/policy.h
+index 5e563d70ec36..af2685f5ee51 100644
+--- a/security/apparmor/include/policy.h
++++ b/security/apparmor/include/policy.h
+@@ -280,6 +280,7 @@ static inline int AUDIT_MODE(struct aa_profile *profile)
+ 	return profile->audit;
+ }
+ 
++bool policy_view_capable(void);
+ bool policy_admin_capable(void);
+ bool aa_may_open_profiles(void);
+ int aa_may_manage_policy(struct aa_label *label, u32 mask);
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index 548a4692dc56..2beb688346d1 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -1336,14 +1336,12 @@ static int param_set_aalockpolicy(const char *val, const struct kernel_param *kp
+ {
+ 	if (!policy_admin_capable())
+ 		return -EPERM;
+-	if (aa_g_lock_policy)
+-		return -EACCES;
+ 	return param_set_bool(val, kp);
+ }
+ 
+ static int param_get_aalockpolicy(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1361,7 +1359,7 @@ static int param_set_aabool(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_aabool(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1379,7 +1377,7 @@ static int param_set_aauint(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_aauint(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1388,7 +1386,7 @@ static int param_get_aauint(char *buffer, const struct kernel_param *kp)
+ 
+ static int param_get_audit(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1417,7 +1415,7 @@ static int param_set_audit(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_mode(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_view_capable())
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 57135d51b3ea..52abc2fa76b6 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -617,7 +617,7 @@ static int audit_policy(struct aa_label *label, const char *op,
+ 	return error;
+ }
+ 
+-bool policy_admin_capable(void)
++bool policy_view_capable(void)
+ {
+ 	struct user_namespace *user_ns = current_user_ns();
+ 	struct aa_ns *ns = aa_get_current_ns();
+@@ -633,6 +633,11 @@ bool policy_admin_capable(void)
+ 	return response;
+ }
+ 
++bool policy_admin_capable(void)
++{
++	return policy_view_capable() && !aa_g_lock_policy;
++}
++
+ bool aa_may_open_profiles(void)
+ {
+ 	struct user_namespace *user_ns = current_user_ns();
+-- 
+2.17.1
+

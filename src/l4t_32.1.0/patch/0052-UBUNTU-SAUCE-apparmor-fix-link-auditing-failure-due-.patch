@@ -1,0 +1,34 @@
+From cfc4ad92fe691c262afad271a7769fe046c560ce Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 15 Feb 2017 15:13:50 -0800
+Subject: [PATCH 52/57] UBUNTU: SAUCE: apparmor: fix link auditing failure due
+ to, uninitialized var
+
+The lperms struct is uninitialized for use with auditing if there is
+an early failure due to a path name error. This can result in incorrect
+logging or in the extreme case apparmor killing the task with a signal
+which results in the failure in the referenced bug.
+
+BugLink: http://bugs.launchpad.net/bugs/1664912
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/file.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/file.c b/security/apparmor/file.c
+index ae0b7c74a9ea..6a0411c8a99b 100644
+--- a/security/apparmor/file.c
++++ b/security/apparmor/file.c
+@@ -374,7 +374,7 @@ static int profile_path_link(struct aa_profile *profile,
+ 			     struct path_cond *cond)
+ {
+ 	const char *lname, *tname = NULL;
+-	struct aa_perms lperms, perms;
++	struct aa_perms lperms = {}, perms;
+ 	const char *info = NULL;
+ 	u32 request = AA_MAY_LINK;
+ 	unsigned int state;
+-- 
+2.17.1
+

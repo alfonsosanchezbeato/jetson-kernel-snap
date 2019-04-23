@@ -1,0 +1,36 @@
+From 3982000d99eea1260d0da09119006aa227f50789 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 11 Nov 2016 16:05:57 -0800
+Subject: [PATCH 41/57] UBUNTU: SAUCE: apparmor: fix cross ns perm of unix
+ domain sockets
+
+When using nested namespaces policy within the nested namespace is trying
+to cross validate with policy outside of the namespace that is not
+visible to it. This results the access being denied and with no way to
+add a rule to policy that would allow it.
+
+The check should only be done again policy that is visible.
+
+BugLink: http://bugs.launchpad.net/bugs/1660832
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/af_unix.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/af_unix.c b/security/apparmor/af_unix.c
+index 8178498f0a2f..757df1ade9a0 100644
+--- a/security/apparmor/af_unix.c
++++ b/security/apparmor/af_unix.c
+@@ -515,7 +515,7 @@ static int profile_peer_perm(struct aa_profile *profile, const char *op, u32 req
+ 				      addr, len, &aad(sa)->info);
+ 		if (!peer_label)
+ 			peer_label = peer_ctx->label;
+-		return fn_for_each(peer_label, peerp,
++		return fn_for_each_in_ns(peer_label, peerp,
+ 				   match_label(profile, peerp, state, request,
+ 					       sa));
+ 	}
+-- 
+2.17.1
+

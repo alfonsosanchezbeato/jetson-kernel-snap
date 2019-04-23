@@ -1,0 +1,44 @@
+From 4659379a2a508c5f8b1139fb52b4c7ef0e49232d Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 11 Nov 2016 16:06:25 -0800
+Subject: [PATCH 45/57] UBUNTU: SAUCE: apparmor: Don't audit denied access of
+ special apparmor .null file
+
+When an fd is disallowed from being inherited during exec, instead of
+closed it is duped to a special apparmor/.null file. This prevents the
+fd from being reused by another file in case the application expects
+the original file on a give fd (eg stdin/stdout etc). This results in
+a denial message like
+[32375.561535] audit: type=1400 audit(1478825963.441:358): apparmor="DENIED" operation="file_inherit" namespace="root//lxd-t_<var-lib-lxd>" profile="/sbin/dhclient" name="/dev/pts/1" pid=16795 comm="dhclient" requested_mask="wr" denied_mask="wr" fsuid=165536 ouid=165536
+
+Further access to the fd is resultin in the rather useless denial message
+of
+[32375.566820] audit: type=1400 audit(1478825963.445:359): apparmor="DENIED" operation="file_perm" namespace="root//lxd-t_<var-lib-lxd>" profile="/sbin/dhclient" name="/apparmor/.null" pid=16795 comm="dhclient" requested_mask="w" denied_mask="w" fsuid=165536 ouid=0
+
+since we have the original denial, the noisy and useless .null based
+denials can be skipped.
+
+BugLink: http://bugs.launchpad.net/bugs/1660836
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/lsm.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index 6c2ee89c1347..66b7fd01defb 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -443,6 +443,9 @@ static int common_file_perm(const char *op, struct file *file, u32 mask)
+ 	struct aa_label *label;
+ 	int error = 0;
+ 
++	if (file->f_path.dentry == aa_null.dentry)
++		return -EACCES;
++
+ 	label = aa_begin_current_label(NO_UPDATE);
+ 	error = aa_file_perm(op, label, file, mask);
+ 	aa_end_current_label(label);
+-- 
+2.17.1
+

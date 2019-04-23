@@ -1,0 +1,90 @@
+From 048ff756b438711bb5ab3832e16d4cf33527d718 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Sat, 12 Nov 2016 11:33:54 -0800
+Subject: [PATCH 44/57] UBUNTU: SAUCE: apparmor: fix label leak when new label
+ is unused
+
+When a new label is created, it is created with a proxy in a circular
+ref count that is broken by replacement. However if the label is not
+used it will never be replaced and the circular ref count will never
+be broken resulting in a leak.
+
+BugLink: http://bugs.launchpad.net/bugs/1660834
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 23 +++++++++++++++++++----
+ 1 file changed, 19 insertions(+), 4 deletions(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 05ac6d6c9c82..69a600b4c1a1 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -308,6 +308,8 @@ int aa_vec_unique(struct aa_profile **vec, int n, int flags)
+ 
+ static void label_destroy(struct aa_label *label)
+ {
++	struct aa_label *tmp;
++
+ 	AA_BUG(!label);
+ 
+ 	if (label_is_stale(label))
+@@ -329,6 +331,11 @@ static void label_destroy(struct aa_label *label)
+ 		rcu_assign_pointer(label->proxy->label, NULL);
+ 
+ 	aa_free_sid(label->sid);
++
++	tmp = rcu_dereference_protected(label->proxy->label, true);
++	if (tmp == label)
++		rcu_assign_pointer(label->proxy->label, NULL);
++
+ 	aa_put_proxy(label->proxy);
+ 	label->proxy = (struct aa_proxy *) PROXY_POISON + 1;
+ }
+@@ -380,6 +387,15 @@ void aa_label_kref(struct kref *kref)
+ 	call_rcu(&label->rcu, label_free_rcu);
+ }
+ 
++static void label_free_or_put_new(struct aa_label *label, struct aa_label *new)
++{
++	if (label != new)
++		/* need to free directly to break circular ref with proxy */
++		aa_label_free(new);
++	else
++		aa_put_label(new);
++}
++
+ bool aa_label_init(struct aa_label *label, int size)
+ {
+ 	AA_BUG(!label);
+@@ -842,7 +858,7 @@ static struct aa_label *vec_create_and_insert_label(struct aa_profile **vec,
+ 	write_lock_irqsave(&ls->lock, flags);
+ 	label = __label_insert(ls, new, false);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+-	aa_put_label(new);
++	label_free_or_put_new(label, new);
+ 
+ 	return label;
+ }
+@@ -1241,7 +1257,7 @@ struct aa_label *aa_label_merge(struct aa_label *a, struct aa_label *b,
+ 			goto out;
+ 
+ 		label = label_merge_insert(new, a, b);
+-		aa_put_label(new);
++		label_free_or_put_new(label, new);
+ 	out:
+ 		aa_put_label(a);
+ 		aa_put_label(b);
+@@ -2042,8 +2058,7 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 	/* ensure label is removed, and redirected correctly */
+ 	__label_remove(label, tmp);
+ 	write_unlock_irqrestore(&ls->lock, flags);
+-
+-	aa_put_label(new);
++	label_free_or_put_new(tmp, new);
+ 
+ 	return tmp;
+ }
+-- 
+2.17.1
+

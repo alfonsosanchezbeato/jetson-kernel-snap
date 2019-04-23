@@ -1,0 +1,42 @@
+From 3801451c8e256514cafa8fe87cf80aa3561564b1 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Sun, 10 Jul 2016 23:12:38 -0700
+Subject: [PATCH 17/57] UBUNTU: SAUCE: apparmor: deleted dentries can be
+ disconnected
+
+BugLink: http://bugs.launchpad.net/bugs/1615892
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/path.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/security/apparmor/path.c b/security/apparmor/path.c
+index 9e95f8bea1f6..3511a0f63a7d 100644
+--- a/security/apparmor/path.c
++++ b/security/apparmor/path.c
+@@ -152,6 +152,9 @@ static int d_namespace_path(const struct path *path, char *buf, char **name,
+ 
+ 	*name = res;
+ 
++	if (!connected)
++		error = disconnect(path, buf, name, flags, disconnected);
++
+ 	/* Handle two cases:
+ 	 * 1. A deleted dentry && profile is not allowing mediation of deleted
+ 	 * 2. On some filesystems, newly allocated dentries appear to the
+@@ -164,9 +167,6 @@ static int d_namespace_path(const struct path *path, char *buf, char **name,
+ 			goto out;
+ 	}
+ 
+-	if (!connected)
+-		error = disconnect(path, buf, name, flags, disconnected);
+-
+ out:
+ 	/*
+ 	 * Append "/" to the pathname.  The root directory is a special
+-- 
+2.17.1
+

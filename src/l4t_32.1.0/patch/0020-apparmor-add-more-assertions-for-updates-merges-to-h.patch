@@ -1,0 +1,44 @@
+From 8a568aa1238f417188c3c85438bb723546e4ad1c Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Thu, 18 Aug 2016 16:42:34 -0700
+Subject: [PATCH 20/57] apparmor: add more assertions for updates/merges to
+ help catch errors
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 6c76628f75d8..738fe5218756 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1061,8 +1061,11 @@ static struct aa_label *label_merge_insert(struct aa_label *new,
+ 	AA_BUG(new->size < a->size + b->size);
+ 
+ 	label_for_each_in_merge(i, a, b, next) {
++		AA_BUG(!next);
+ 		if (profile_is_stale(next)) {
+ 			new->vec[k] = aa_get_newest_profile(next);
++			AA_BUG(!new->vec[k]->label.proxy);
++			AA_BUG(!new->vec[k]->label.proxy->label);
+ 			if (next->label.proxy != new->vec[k]->label.proxy)
+ 				invcount++;
+ 			k++;
+@@ -2007,7 +2010,11 @@ static struct aa_label *__label_update(struct aa_label *label)
+ 	ls = labels_set(label);
+ 	write_lock_irqsave(&ls->lock, flags);
+ 	for (i = 0; i < label->size; i++) {
++		AA_BUG(!label->vec[i]);
+ 		new->vec[i] = aa_get_newest_profile(label->vec[i]);
++		AA_BUG(!new->vec[i]);
++		AA_BUG(!new->vec[i]->label.proxy);
++		AA_BUG(!new->vec[i]->label.proxy->label);
+ 		if (new->vec[i]->label.proxy != label->vec[i]->label.proxy)
+ 			invcount++;
+ 	}
+-- 
+2.17.1
+

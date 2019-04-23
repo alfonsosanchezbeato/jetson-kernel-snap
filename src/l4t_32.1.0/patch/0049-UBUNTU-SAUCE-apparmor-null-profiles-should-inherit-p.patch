@@ -1,0 +1,31 @@
+From df9bd682051b2b53b41bc705f3a07e393974b3bb Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Thu, 12 Jan 2017 15:12:25 -0800
+Subject: [PATCH 49/57] UBUNTU: SAUCE: apparmor: null profiles should inherit
+ parent control flags
+
+null profiles that don't have the same control flags as the parent
+behave in unexpected ways and can cause failures.
+
+BugLink: http://bugs.launchpad.net/bugs/1656121
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/policy.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index f2ffcf109e28..f5f286ab70b4 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -350,6 +350,7 @@ struct aa_profile *aa_null_profile(struct aa_profile *parent, bool hat,
+ 	profile->label.flags |= FLAG_NULL;
+ 	if (hat)
+ 		profile->label.flags |= FLAG_HAT;
++	profile->path_flags = parent->path_flags;
+ 
+ 	/* released on free_profile */
+ 	rcu_assign_pointer(profile->parent, aa_get_profile(parent));
+-- 
+2.17.1
+

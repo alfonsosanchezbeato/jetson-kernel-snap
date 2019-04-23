@@ -1,0 +1,269 @@
+From fd5062ebb9fae30e8ef489593f19732ceeb8a783 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Mon, 26 Sep 2016 19:06:51 -0700
+Subject: [PATCH 37/57] apparmor: update policy permissions to consider ns
+ being viewed/managed
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c     | 12 ++++++------
+ security/apparmor/include/policy.h |  6 +++---
+ security/apparmor/lsm.c            | 22 +++++++++++-----------
+ security/apparmor/policy.c         | 28 +++++++++++++++++++---------
+ 4 files changed, 39 insertions(+), 29 deletions(-)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index 031e4f8cdcf8..0150d0644277 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -130,7 +130,7 @@ static ssize_t policy_update(u32 mask, const char __user *buf, size_t size,
+ 	/* high level check about policy management - fine grained in
+ 	 * below after unpack
+ 	 */
+-	error = aa_may_manage_policy(label, mask);
++	error = aa_may_manage_policy(label, NULL, mask);
+ 	if (error)
+ 		return error;
+ 
+@@ -182,7 +182,7 @@ static ssize_t profile_remove(struct file *f, const char __user *buf,
+ 	/* high level check about policy management - fine grained in
+ 	 * below after unpack
+ 	 */
+-	error = aa_may_manage_policy(label, AA_MAY_REMOVE_POLICY);
++	error = aa_may_manage_policy(label, NULL, AA_MAY_REMOVE_POLICY);
+ 	if (error)
+ 		return error;
+ 
+@@ -832,7 +832,7 @@ static ssize_t rawdata_read(struct file *file, char __user *buf, size_t size,
+ 
+ static int rawdata_open(struct inode *inode, struct file *file)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EACCES;
+ 
+ 	file->private_data = aa_get_proxy(inode->i_private);
+@@ -1023,7 +1023,7 @@ static int ns_mkdir_op(struct inode *dir, struct dentry *dentry, umode_t mode)
+ 	struct aa_ns *ns, *parent;
+ 	/* TODO: improve permission check */
+ 	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
+-	int error = aa_may_manage_policy(label, AA_MAY_LOAD_POLICY);
++	int error = aa_may_manage_policy(label, NULL, AA_MAY_LOAD_POLICY);
+ 	aa_end_current_label(label);
+ 	if (error)
+ 		return error;
+@@ -1060,7 +1060,7 @@ static int ns_rmdir_op(struct inode *dir, struct dentry *dentry)
+ 	struct aa_ns *ns, *parent;
+ 	/* TODO: improve permission check */
+ 	struct aa_label *label = aa_begin_current_label(DO_UPDATE);
+-	int error = aa_may_manage_policy(label, AA_MAY_LOAD_POLICY);
++	int error = aa_may_manage_policy(label, NULL, AA_MAY_LOAD_POLICY);
+ 	aa_end_current_label(label);
+ 	if (error)
+ 		return error;
+@@ -1442,7 +1442,7 @@ static const struct seq_operations aa_fs_profiles_op = {
+ 
+ static int profiles_open(struct inode *inode, struct file *file)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EACCES;
+ 
+ 	return seq_open(file, &aa_fs_profiles_op);
+diff --git a/security/apparmor/include/policy.h b/security/apparmor/include/policy.h
+index 657d1a52b66f..27cab34bde58 100644
+--- a/security/apparmor/include/policy.h
++++ b/security/apparmor/include/policy.h
+@@ -296,9 +296,9 @@ static inline int AUDIT_MODE(struct aa_profile *profile)
+ 	return profile->audit;
+ }
+ 
+-bool policy_view_capable(void);
+-bool policy_admin_capable(void);
++bool policy_view_capable(struct aa_ns *ns);
++bool policy_admin_capable(struct aa_ns *ns);
+ bool aa_may_open_profiles(void);
+-int aa_may_manage_policy(struct aa_label *label, u32 mask);
++int aa_may_manage_policy(struct aa_label *label, struct aa_ns *ns, u32 mask);
+ 
+ #endif /* __AA_POLICY_H */
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index 2beb688346d1..6c2ee89c1347 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -1334,14 +1334,14 @@ __setup("apparmor=", apparmor_enabled_setup);
+ /* set global flag turning off the ability to load policy */
+ static int param_set_aalockpolicy(const char *val, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	return param_set_bool(val, kp);
+ }
+ 
+ static int param_get_aalockpolicy(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1350,7 +1350,7 @@ static int param_get_aalockpolicy(char *buffer, const struct kernel_param *kp)
+ 
+ static int param_set_aabool(const char *val, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1359,7 +1359,7 @@ static int param_set_aabool(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_aabool(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1368,7 +1368,7 @@ static int param_get_aabool(char *buffer, const struct kernel_param *kp)
+ 
+ static int param_set_aauint(const char *val, const struct kernel_param *kp)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1377,7 +1377,7 @@ static int param_set_aauint(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_aauint(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1386,7 +1386,7 @@ static int param_get_aauint(char *buffer, const struct kernel_param *kp)
+ 
+ static int param_get_audit(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1396,7 +1396,7 @@ static int param_get_audit(char *buffer, const struct kernel_param *kp)
+ static int param_set_audit(const char *val, const struct kernel_param *kp)
+ {
+ 	int i;
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1415,7 +1415,7 @@ static int param_set_audit(const char *val, const struct kernel_param *kp)
+ 
+ static int param_get_mode(char *buffer, const struct kernel_param *kp)
+ {
+-	if (!policy_view_capable())
++	if (!policy_view_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1426,7 +1426,7 @@ static int param_get_mode(char *buffer, const struct kernel_param *kp)
+ static int param_set_mode(const char *val, const struct kernel_param *kp)
+ {
+ 	int i;
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+@@ -1513,7 +1513,7 @@ static int __init alloc_buffers(void)
+ static int apparmor_dointvec(struct ctl_table *table, int write,
+ 			     void __user *buffer, size_t *lenp, loff_t *ppos)
+ {
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(NULL))
+ 		return -EPERM;
+ 	if (!apparmor_enabled)
+ 		return -EINVAL;
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 3fd0bb45560a..13d7104e083d 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -641,25 +641,35 @@ static int audit_policy(struct aa_label *label, const char *op,
+ 	return error;
+ }
+ 
+-bool policy_view_capable(void)
++/**
++ * policy_view_capable - check if viewing policy in at @ns is allowed
++ * ns: namespace being viewed by current task (may be NULL)
++ * Returns: true if viewing policy is allowed
++ *
++ * If @ns is NULL then the namespace being viewed is assumed to be the
++ * tasks current namespace.
++ */
++bool policy_view_capable(struct aa_ns *ns)
+ {
+ 	struct user_namespace *user_ns = current_user_ns();
+-	struct aa_ns *ns = aa_get_current_ns();
++	struct aa_ns *view_ns = aa_get_current_ns();
+ 	bool root_in_user_ns = uid_eq(current_euid(), make_kuid(user_ns, 0)) ||
+ 			       in_egroup_p(make_kgid(user_ns, 0));
+ 	bool response = false;
++	if (!ns)
++		ns = view_ns;
+ 
+-	if (root_in_user_ns &&
++	if (root_in_user_ns && aa_ns_visible(view_ns, ns, true) &&
+ 	    (user_ns == &init_user_ns ||
+ 	     (unprivileged_userns_apparmor_policy != 0 &&
+-	      user_ns->level == ns->level)))
++	      user_ns->level == view_ns->level)))
+ 		response = true;
+-	aa_put_ns(ns);
++	aa_put_ns(view_ns);
+ 
+ 	return response;
+ }
+ 
+-bool policy_admin_capable(void)
++bool policy_admin_capable(struct aa_ns *ns)
+ {
+ 	struct user_namespace *user_ns = current_user_ns();
+ 	bool capable = ns_capable(user_ns, CAP_MAC_ADMIN);
+@@ -667,7 +677,7 @@ bool policy_admin_capable(void)
+ 	AA_DEBUG("cap_mac_admin? %d\n", capable);
+ 	AA_DEBUG("policy locked? %d\n", aa_g_lock_policy);
+ 
+-	return policy_view_capable() && capable && !aa_g_lock_policy;
++	return policy_view_capable(ns) && capable && !aa_g_lock_policy;
+ }
+ 
+ /**
+@@ -677,7 +687,7 @@ bool policy_admin_capable(void)
+  *
+  * Returns: 0 if the task is allowed to manipulate policy else error
+  */
+-int aa_may_manage_policy(struct aa_label *label, u32 mask)
++int aa_may_manage_policy(struct aa_label *label, struct aa_ns *ns, u32 mask)
+ {
+ 	const char *op;
+ 
+@@ -693,7 +703,7 @@ int aa_may_manage_policy(struct aa_label *label, u32 mask)
+ 		return audit_policy(label, op, NULL, NULL, "policy_locked",
+ 				    -EACCES);
+ 
+-	if (!policy_admin_capable())
++	if (!policy_admin_capable(ns))
+ 		return audit_policy(label, op, NULL, NULL, "not policy admin",
+ 				    -EACCES);
+ 
+-- 
+2.17.1
+

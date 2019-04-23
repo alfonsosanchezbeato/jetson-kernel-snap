@@ -1,0 +1,48 @@
+From 021c19012964fffc14c9f645ae401196913c15de Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 31 Mar 2017 05:05:05 -0700
+Subject: [PATCH 54/57] UBUNTU: SAUCE: apparmor: add information about the
+ query inteface to the feature set
+
+Currently there is now way for userspace to determine what queries and
+options are supported without trying them. Add the information to the
+feature set exported in apparmorfs.
+
+BugLink: http://bugs.launchpad.net/bugs/1678030
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index 70a0e6a3c3b9..7147b33a5eff 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -1566,6 +1566,15 @@ static struct aa_fs_entry aa_fs_entry_dbus[] = {
+ 	{ }
+ };
+ 
++static struct aa_fs_entry aa_fs_entry_query_label[] = {
++	AA_FS_FILE_STRING("perms", "allow deny audit quiet"),
++	{ }
++};
++
++static struct aa_fs_entry aa_fs_entry_query[] = {
++	AA_FS_DIR("label",			aa_fs_entry_query_label),
++	{ }
++};
+ static struct aa_fs_entry aa_fs_entry_features[] = {
+ 	AA_FS_DIR("policy",			aa_fs_entry_policy),
+ 	AA_FS_DIR("domain",			aa_fs_entry_domain),
+@@ -1579,6 +1588,7 @@ static struct aa_fs_entry aa_fs_entry_features[] = {
+ 	AA_FS_DIR("ptrace",			aa_fs_entry_ptrace),
+ 	AA_FS_DIR("signal",			aa_fs_entry_signal),
+ 	AA_FS_DIR("dbus",			aa_fs_entry_dbus),
++	AA_FS_DIR("query",			aa_fs_entry_query),
+ 	{ }
+ };
+ 
+-- 
+2.17.1
+

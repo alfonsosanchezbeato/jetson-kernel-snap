@@ -1,0 +1,36 @@
+From 92e041e042852d31ae43afad46733497503503c8 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Mon, 22 Aug 2016 14:14:48 -0700
+Subject: [PATCH 14/57] UBUNTU: SAUCE: apparmor: fix vec_unique for vectors
+ larger than 8
+
+the vec_unique path for large vectors is broken, leading to oopses
+when a file handle is shared between 8 different security domains, and
+then a profile replacement/removal causing a label invalidation (ie. not
+all replacements) is done.
+
+BugLink: http://bugs.launchpad.net/bugs/1579135
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 144d759c8597..c11ca99af8e1 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -229,7 +229,7 @@ static inline int unique(struct aa_profile **vec, int n)
+ 	AA_BUG(!vec);
+ 
+ 	pos = 0;
+-	for (i = 1; 1 < n; i++) {
++	for (i = 1; i < n; i++) {
+ 		int res = profile_cmp(vec[pos], vec[i]);
+ 		AA_BUG(res > 0, "vec not sorted");
+ 		if (res == 0) {
+-- 
+2.17.1
+

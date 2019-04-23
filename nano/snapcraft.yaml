@@ -16,9 +16,9 @@ parts:
       # Get kernel sources, which are distributed across different repos
       mv l4t_32.1.0/source_sync.sh .
       ./source_sync.sh -k tegra-l4t-r32.1
-      # Config options for UC
-      mkdir sources/kernel/kernel-4.9/kernel/configs/snappy/
-      cp l4t_32.1.0/configs/* sources/kernel/kernel-4.9/kernel/configs/snappy/
+      # Apply canonical patches - apparmor stuff essentially
+      cd sources/kernel/kernel-4.9
+      git am ../../../l4t_32.1.0/patch/*
     override-build: |
       JETSON_KERNEL_CONFIG=tegra_defconfig ./build.sh
     build-packages:

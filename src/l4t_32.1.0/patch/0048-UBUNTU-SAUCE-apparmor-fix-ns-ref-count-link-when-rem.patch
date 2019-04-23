@@ -1,0 +1,34 @@
+From 9b45acd12a3601317bca04b0d414fd0166c107b0 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 18 Jan 2017 01:23:11 -0800
+Subject: [PATCH 48/57] UBUNTU: SAUCE: apparmor: fix ns ref count link when
+ removing profiles from policy
+
+BugLink: http://bugs.launchpad.net/bugs/1660849
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/policy.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index afa5984d91b8..f2ffcf109e28 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -1104,11 +1104,13 @@ ssize_t aa_remove_profiles(struct aa_ns *view, struct aa_label *label,
+ 
+ 	/* don't fail removal if audit fails */
+ 	(void) audit_policy(label, OP_PROF_RM, ns_name, name, info, error);
++	aa_put_ns(ns);
+ 	aa_put_profile(profile);
+ 	return size;
+ 
+ fail_ns_lock:
+ 	mutex_unlock(&ns->lock);
++	aa_put_ns(ns);
+ 
+ fail:
+ 	(void) audit_policy(label, OP_PROF_RM, ns_name, name, info, error);
+-- 
+2.17.1
+

@@ -1,0 +1,28 @@
+From 0b1d59caa376cd8da324a93186949cd3804b12aa Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 27 Sep 2016 20:11:29 -0700
+Subject: [PATCH 39/57] apparmor: bump domain stacking version to 1.2
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index b27720e1f01c..ff3d6138f36a 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -1530,7 +1530,7 @@ static struct aa_fs_entry aa_fs_entry_domain[] = {
+ 	AA_FS_FILE_BOOLEAN("change_onexec",	1),
+ 	AA_FS_FILE_BOOLEAN("change_profile",	1),
+ 	AA_FS_FILE_BOOLEAN("stack",		1),
+-	AA_FS_FILE_STRING("version", "1.1"),
++	AA_FS_FILE_STRING("version", "1.2"),
+ 	{ }
+ };
+ 
+-- 
+2.17.1
+

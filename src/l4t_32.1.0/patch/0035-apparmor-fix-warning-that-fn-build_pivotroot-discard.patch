@@ -1,0 +1,42 @@
+From 443b98e11e71dbb15115a132cf9fdb60c3cc40e3 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 28 Sep 2016 02:23:56 -0700
+Subject: [PATCH 35/57] apparmor: fix warning that fn build_pivotroot discards
+ const
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+fix mount.c warnings:
+
+warning: passing argument 2 of ‘build_pivotroot’ discards ‘const’ qualifier fro\
+m pointer target type [-Wdiscarded-qualifiers]
+
+warning: passing argument 4 of ‘build_pivotroot’ discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/mount.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index 53420626f08d..907d3f0a0278 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -596,9 +596,9 @@ int aa_umount(struct aa_label *label, struct vfsmount *mnt, int flags)
+  * Returns: label for transition or ERR_PTR. Does not return NULL
+  */
+ static struct aa_label *build_pivotroot(struct aa_profile *profile,
+-					struct path *new_path,
++					const struct path *new_path,
+ 					char *new_buffer,
+-					struct path *old_path,
++					const struct path *old_path,
+ 					char *old_buffer)
+ {
+ 	const char *old_name, *new_name = NULL, *info = NULL;
+-- 
+2.17.1
+

@@ -1,0 +1,32 @@
+From 8ebfddeda58ab2ec8370b083b0279cae8bb12d56 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Thu, 22 Sep 2016 14:53:40 -0700
+Subject: [PATCH 32/57] apparmor: add __aa_find_ns fn
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/policy_ns.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/security/apparmor/policy_ns.c b/security/apparmor/policy_ns.c
+index cbef81674012..88092b42543b 100644
+--- a/security/apparmor/policy_ns.c
++++ b/security/apparmor/policy_ns.c
+@@ -162,6 +162,11 @@ static struct aa_ns *__aa_findn_ns(struct list_head *head, const char *name,
+ 	return (struct aa_ns *)__policy_strn_find(head, name, n);
+ }
+ 
++static struct aa_ns *__aa_find_ns(struct list_head *head, const char *name)
++{
++	return __aa_findn_ns(head, name, strlen(name));
++}
++
+ /**
+  * aa_find_ns  -  look up a profile namespace on the namespace list
+  * @root: namespace to search in  (NOT NULL)
+-- 
+2.17.1
+

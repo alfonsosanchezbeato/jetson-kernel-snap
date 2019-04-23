@@ -1,0 +1,55 @@
+From 6cb2bf2aa1684719ee1d180e16dd9505ae5d41f7 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Mon, 30 Jan 2017 02:38:14 -0800
+Subject: [PATCH 50/57] UBUNTU: SAUCE: apparmor: flock mediation is not being
+ enforced on cache check
+
+When an open file with cached permissions is checked for the flock
+permission. The cache check fails and falls through to no error instead
+of auditing, and returning an error.
+
+For the fall through to do a permission check, so it will audit the
+failed flock permission check.
+
+BugLink: http://bugs.launchpad.net/bugs/1658219
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/file.c | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/security/apparmor/file.c b/security/apparmor/file.c
+index 546f7688416b..ae0b7c74a9ea 100644
+--- a/security/apparmor/file.c
++++ b/security/apparmor/file.c
+@@ -536,18 +536,23 @@ static int __file_path_perm(const char *op, struct aa_label *label,
+ 	error = fn_for_each_not_in_set(flabel, label, profile,
+ 			profile_path_perm(op, profile, &file->f_path, buffer,
+ 					  request, &cond, flags, &perms));
+-	if (denied) {
++	if (denied && !error) {
+ 		/* check every profile in file label that was not tested
+ 		 * in the initial check above.
+ 		 */
+ 		/* TODO: cache full perms so this only happens because of
+ 		 * conditionals */
+ 		/* TODO: don't audit here */
+-		last_error(error,
+-			fn_for_each_not_in_set(label, flabel, profile,
++		if (label == flabel)
++			error = fn_for_each(label, profile,
++				profile_path_perm(op, profile, &file->f_path,
++						  buffer, request, &cond, flags,
++						  &perms));
++		else
++			error = fn_for_each_not_in_set(label, flabel, profile,
+ 				profile_path_perm(op, profile, &file->f_path,
+ 						  buffer, request, &cond, flags,
+-						  &perms)));
++						  &perms));
+ 	}
+ 	if (!error)
+ 		update_file_ctx(file_ctx(file), label, request);
+-- 
+2.17.1
+

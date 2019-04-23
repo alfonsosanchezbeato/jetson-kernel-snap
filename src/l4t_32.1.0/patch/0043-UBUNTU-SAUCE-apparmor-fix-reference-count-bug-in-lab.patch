@@ -1,0 +1,31 @@
+From 89cbf0de2fbddb092cb432b2fd8bc9d431213c21 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Sat, 12 Nov 2016 01:39:51 -0800
+Subject: [PATCH 43/57] UBUNTU: SAUCE: apparmor: fix reference count bug in
+ label_merge_insert()
+
+@new does not have a reference taken locally and should not have its
+reference put locally either.
+
+BugLink: http://bugs.launchpad.net/bugs/1660833
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/label.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/security/apparmor/label.c b/security/apparmor/label.c
+index 738fe5218756..05ac6d6c9c82 100644
+--- a/security/apparmor/label.c
++++ b/security/apparmor/label.c
+@@ -1083,7 +1083,6 @@ static struct aa_label *label_merge_insert(struct aa_label *new,
+ 		/* TODO: deal with reference labels */
+ 		if (new->size == 1) {
+ 			label = aa_get_label(&new->vec[0]->label);
+-			aa_put_label(new);
+ 			return label;
+ 		}
+ 	} else if (!stale) {
+-- 
+2.17.1
+

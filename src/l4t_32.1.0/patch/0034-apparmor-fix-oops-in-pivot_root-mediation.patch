@@ -1,0 +1,39 @@
+From 832b72d6720d1c1ef5262c23f225104ea8d397bd Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 27 Sep 2016 22:14:12 -0700
+Subject: [PATCH 34/57] apparmor: fix oops in pivot_root mediation
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/mount.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/security/apparmor/mount.c b/security/apparmor/mount.c
+index 5ca4ccf4421a..53420626f08d 100644
+--- a/security/apparmor/mount.c
++++ b/security/apparmor/mount.c
+@@ -612,6 +612,9 @@ static struct aa_label *build_pivotroot(struct aa_profile *profile,
+ 	AA_BUG(!new_path);
+ 	AA_BUG(!old_path);
+ 
++	if (profile_unconfined(profile))
++		return aa_get_newest_label(&profile->label);
++
+ 	error = aa_path_name(old_path, path_flags(profile, old_path),
+ 			     old_buffer, &old_name, &info,
+ 			     profile->disconnected);
+@@ -651,7 +654,7 @@ static struct aa_label *build_pivotroot(struct aa_profile *profile,
+ 	} else if (target)
+ 		return target;
+ 
+-	return aa_get_label(&profile->label);
++	return aa_get_newest_label(&profile->label);
+ }
+ 
+ int aa_pivotroot(struct aa_label *label, const struct path *old_path,
+-- 
+2.17.1
+

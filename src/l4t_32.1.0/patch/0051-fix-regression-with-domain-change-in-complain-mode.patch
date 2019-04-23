@@ -1,0 +1,64 @@
+From 7eaf2aa24f71ef19afa7ad493897769b35509eee Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Thu, 2 Feb 2017 01:09:02 -0800
+Subject: [PATCH 51/57] fix regression with domain change in complain mode
+
+The patch
+Fix no_new_privs blocking change_onexec when using stacked namespaces
+
+changed when the no_new_privs checks is processed so the test could
+be correctly applied in a stacked profile situation.
+
+However it changed the behavior of the error returned in complain mode,
+which will have both @error and @new set.
+
+Fix this by introducing a new var to indicate the no_new_privs condition
+instead of relying on error. While doing this allow the new label under
+no new privs to be audited, by having its reference put in the error path,
+instead of in the no_new_privs condition check.
+
+BugLink: http://bugs.launchpad.net/bugs/1661030
+BugLink: http://bugs.launchpad.net/bugs/1648903
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/domain.c | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
+index cfb0c288d657..576d51194eae 100644
+--- a/security/apparmor/domain.c
++++ b/security/apparmor/domain.c
+@@ -496,6 +496,7 @@ static struct aa_label *profile_transition(struct aa_profile *profile,
+ 	const char *info = NULL, *name = NULL, *target = NULL;
+ 	unsigned int state = profile->file.start;
+ 	struct aa_perms perms = {};
++	bool nonewprivs = false;
+ 	int error = 0;
+ 
+ 	AA_BUG(!profile);
+@@ -571,8 +572,7 @@ static struct aa_label *profile_transition(struct aa_profile *profile,
+ 	    !aa_label_is_subset(new, &profile->label)) {
+ 		error = -EPERM;
+ 		info = "no new privs";
+-		aa_put_label(new);
+-		new = NULL;
++		nonewprivs = true;
+ 		goto audit;
+ 	}
+ 
+@@ -589,9 +589,8 @@ static struct aa_label *profile_transition(struct aa_profile *profile,
+ audit:
+ 	aa_audit_file(profile, &perms, OP_EXEC, MAY_EXEC, name, target, new,
+ 		      cond->uid, info, error);
+-	if (error) {
+-		if (new)
+-			aa_put_label(new);
++	if (!new || nonewprivs) {
++		aa_put_label(new);
+ 		return ERR_PTR(error);
+ 	}
+ 
+-- 
+2.17.1
+

@@ -1,0 +1,557 @@
+From 419b2965abe722ad986614b0325ad1aee1116d95 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Wed, 14 Sep 2016 15:23:55 -0700
+Subject: [PATCH 30/57] apparmor: add interface to be able to grab loaded
+ policy
+
+Check point/restore needs to be able to grab policy currently loaded
+into the kernel.
+
+BugLink: http://bugs.launchpad.net/bugs/1611078
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c            | 156 ++++++++++++++++++++--
+ security/apparmor/crypto.c                |  37 +++++
+ security/apparmor/include/apparmorfs.h    |   5 +
+ security/apparmor/include/crypto.h        |   5 +
+ security/apparmor/include/policy.h        |   5 +-
+ security/apparmor/include/policy_unpack.h |  27 +++-
+ security/apparmor/policy.c                |  12 +-
+ security/apparmor/policy_unpack.c         |  29 +++-
+ 8 files changed, 248 insertions(+), 28 deletions(-)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index b22ccd7706f9..b11ce28aad53 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -35,6 +35,7 @@
+ #include "include/policy.h"
+ #include "include/resource.h"
+ #include "include/lib.h"
++#include "include/policy_unpack.h"
+ 
+ /**
+  * aa_mangle_name - mangle a profile name to std profile layout form
+@@ -85,11 +86,12 @@ static int mangle_name(const char *name, char *target)
+  * Returns: kernel buffer containing copy of user buffer data or an
+  *          ERR_PTR on failure.
+  */
+-static char *aa_simple_write_to_buffer(const char __user *userbuf,
+-				       size_t alloc_size, size_t copy_size,
+-				       loff_t *pos)
++static struct aa_loaddata *aa_simple_write_to_buffer(const char __user *userbuf,
++						     size_t alloc_size,
++						     size_t copy_size,
++						     loff_t *pos)
+ {
+-	char *data;
++	struct aa_loaddata *data;
+ 
+ 	BUG_ON(copy_size > alloc_size);
+ 
+@@ -98,11 +100,15 @@ static char *aa_simple_write_to_buffer(const char __user *userbuf,
+ 		return ERR_PTR(-ESPIPE);
+ 
+ 	/* freed by caller to simple_write_to_buffer */
+-	data = kvmalloc(alloc_size);
++	data = kvmalloc(sizeof(*data) + alloc_size);
+ 	if (data == NULL)
+ 		return ERR_PTR(-ENOMEM);
++	kref_init(&data->count);
++	data->size = copy_size;
++	data->hash = NULL;
++	data->abi = 0;
+ 
+-	if (copy_from_user(data, userbuf, copy_size)) {
++	if (copy_from_user(data->data, userbuf, copy_size)) {
+ 		kvfree(data);
+ 		return ERR_PTR(-EFAULT);
+ 	}
+@@ -115,7 +121,7 @@ static ssize_t policy_update(u32 mask, const char __user *buf, size_t size,
+ {
+ 	struct aa_label *label;
+ 	ssize_t error;
+-	char *data;
++	struct aa_loaddata *data;
+ 
+ 	label = aa_begin_current_label(DO_UPDATE);
+ 
+@@ -129,8 +135,8 @@ static ssize_t policy_update(u32 mask, const char __user *buf, size_t size,
+ 	data = aa_simple_write_to_buffer(buf, size, size, pos);
+ 	error = PTR_ERR(data);
+ 	if (!IS_ERR(data)) {
+-		error = aa_replace_profiles(label, mask, data, size);
+-		kvfree(data);
++		error = aa_replace_profiles(label, mask, data);
++		aa_put_loaddata(data);
+ 	}
+ 	aa_end_current_label(label);
+ 
+@@ -166,9 +172,9 @@ static const struct file_operations aa_fs_profile_replace = {
+ static ssize_t profile_remove(struct file *f, const char __user *buf,
+ 			      size_t size, loff_t *pos)
+ {
++	struct aa_loaddata *data;
+ 	struct aa_label *label;
+ 	ssize_t error;
+-	char *data;
+ 
+ 	label = aa_begin_current_label(DO_UPDATE);
+ 	/* high level check about policy management - fine grained in
+@@ -186,9 +192,9 @@ static ssize_t profile_remove(struct file *f, const char __user *buf,
+ 
+ 	error = PTR_ERR(data);
+ 	if (!IS_ERR(data)) {
+-		data[size] = 0;
+-		error = aa_remove_profiles(label, data, size);
+-		kvfree(data);
++		data->data[size] = 0;
++		error = aa_remove_profiles(label, data->data, size);
++		aa_put_loaddata(data);
+ 	}
+ 	aa_end_current_label(label);
+ 
+@@ -643,6 +649,102 @@ static const struct file_operations aa_fs_seq_hash_fops = {
+ 	.release	= single_release,
+ };
+ 
++static int rawdata_release(struct inode *inode, struct file *file)
++{
++	/* TODO: switch to loaddata when profile switched to symlink */
++	aa_put_proxy(file->private_data);
++
++	return 0;
++}
++
++static int aa_fs_seq_raw_abi_show(struct seq_file *seq, void *v)
++{
++	struct aa_proxy *proxy = seq->private;
++	struct aa_label *label = aa_get_label_rcu(&proxy->label);
++	struct aa_profile *profile = labels_profile(label);
++
++	if (profile->rawdata->abi) {
++		seq_printf(seq, "v%d", profile->rawdata->abi);
++		seq_puts(seq, "\n");
++	}
++	aa_put_label(label);
++
++	return 0;
++}
++
++static int aa_fs_seq_raw_abi_open(struct inode *inode, struct file *file)
++{
++	return aa_fs_seq_profile_open(inode, file, aa_fs_seq_raw_abi_show);
++}
++
++static const struct file_operations aa_fs_seq_raw_abi_fops = {
++	.owner		= THIS_MODULE,
++	.open		= aa_fs_seq_raw_abi_open,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= aa_fs_seq_profile_release,
++};
++
++static int aa_fs_seq_raw_hash_show(struct seq_file *seq, void *v)
++{
++	struct aa_proxy *proxy = seq->private;
++	struct aa_label *label = aa_get_label_rcu(&proxy->label);
++	struct aa_profile *profile = labels_profile(label);
++	unsigned int i, size = aa_hash_size();
++
++	if (profile->rawdata->hash) {
++		for (i = 0; i < size; i++)
++			seq_printf(seq, "%.2x", profile->rawdata->hash[i]);
++		seq_puts(seq, "\n");
++	}
++	aa_put_label(label);
++
++	return 0;
++}
++
++static int aa_fs_seq_raw_hash_open(struct inode *inode, struct file *file)
++{
++	return aa_fs_seq_profile_open(inode, file, aa_fs_seq_raw_hash_show);
++}
++
++static const struct file_operations aa_fs_seq_raw_hash_fops = {
++	.owner		= THIS_MODULE,
++	.open		= aa_fs_seq_raw_hash_open,
++	.read		= seq_read,
++	.llseek		= seq_lseek,
++	.release	= aa_fs_seq_profile_release,
++};
++
++static ssize_t rawdata_read(struct file *file, char __user *buf, size_t size,
++			    loff_t *ppos)
++{
++	struct aa_proxy *proxy = file->private_data;
++	struct aa_label *label = aa_get_label_rcu(&proxy->label);
++	struct aa_profile *profile = labels_profile(label);
++
++	ssize_t ret = simple_read_from_buffer(buf, size, ppos, profile->rawdata->data, profile->rawdata->size);
++	aa_put_label(label);
++
++	return ret;
++}
++
++static int rawdata_open(struct inode *inode, struct file *file)
++{
++	if (!policy_view_capable())
++		return -EACCES;
++
++	file->private_data = aa_get_proxy(inode->i_private);
++
++	return 0;
++}
++
++static const struct file_operations aa_fs_rawdata_fops = {
++	.open = rawdata_open,
++	.read = rawdata_read,
++	.llseek = generic_file_llseek,
++	.release = rawdata_release,
++};
++
+ /** fns to setup dynamic per profile/namespace files **/
+ 
+ /**
+@@ -774,6 +876,29 @@ int __aa_fs_profile_mkdir(struct aa_profile *profile, struct dentry *parent)
+ 		profile->dents[AAFS_PROF_HASH] = dent;
+ 	}
+ 
++	if (profile->rawdata) {
++		dent = create_profile_file(dir, "raw_hash", profile,
++					   &aa_fs_seq_raw_hash_fops);
++		if (IS_ERR(dent))
++			goto fail;
++		profile->dents[AAFS_PROF_RAW_HASH] = dent;
++
++		dent = create_profile_file(dir, "raw_abi", profile,
++					   &aa_fs_seq_raw_abi_fops);
++		if (IS_ERR(dent))
++			goto fail;
++		profile->dents[AAFS_PROF_RAW_ABI] = dent;
++
++		dent = securityfs_create_file("raw_data", S_IFREG | 0444, dir,
++					      profile->label.proxy,
++					      &aa_fs_rawdata_fops);
++		if (IS_ERR(dent))
++			goto fail;
++		profile->dents[AAFS_PROF_RAW_DATA] = dent;
++		d_inode(dent)->i_size = profile->rawdata->size;
++		aa_get_proxy(profile->label.proxy);
++	}
++
+ 	list_for_each_entry(child, &profile->base.profiles, base.list) {
+ 		error = __aa_fs_profile_mkdir(child, prof_child_dir(profile));
+ 		if (error)
+@@ -848,6 +973,11 @@ int __aa_fs_ns_mkdir(struct aa_ns *ns, struct dentry *parent, const char *name)
+ 		goto fail;
+ 	ns_subprofs_dir(ns) = dent;
+ 
++	dent = securityfs_create_dir("raw_data", dir);
++	if (IS_ERR(dent))
++		goto fail;
++	ns_subdata_dir(ns) = dent;
++
+ 	dent = securityfs_create_dir("namespaces", dir);
+ 	if (IS_ERR(dent))
+ 		goto fail;
+diff --git a/security/apparmor/crypto.c b/security/apparmor/crypto.c
+index b75dab0df1cb..5db5fe6bef35 100644
+--- a/security/apparmor/crypto.c
++++ b/security/apparmor/crypto.c
+@@ -29,6 +29,43 @@ unsigned int aa_hash_size(void)
+ 	return apparmor_hash_size;
+ }
+ 
++char *aa_calc_hash(void *data, size_t len)
++{
++	struct {
++		struct shash_desc shash;
++		char ctx[crypto_shash_descsize(apparmor_tfm)];
++	} desc;
++	char *hash = NULL;
++	int error = -ENOMEM;
++
++	if (!apparmor_tfm)
++		return NULL;
++
++	hash = kzalloc(apparmor_hash_size, GFP_KERNEL);
++	if (!hash)
++		goto fail;
++
++	desc.shash.tfm = apparmor_tfm;
++	desc.shash.flags = 0;
++
++	error = crypto_shash_init(&desc.shash);
++	if (error)
++		goto fail;
++	error = crypto_shash_update(&desc.shash, (u8 *) data, len);
++	if (error)
++		goto fail;
++	error = crypto_shash_final(&desc.shash, hash);
++	if (error)
++		goto fail;
++
++	return hash;
++
++fail:
++	kfree(hash);
++
++	return ERR_PTR(error);
++}
++
+ int aa_calc_profile_hash(struct aa_profile *profile, u32 version, void *start,
+ 			 size_t len)
+ {
+diff --git a/security/apparmor/include/apparmorfs.h b/security/apparmor/include/apparmorfs.h
+index c6f84dc5c2b2..15242413c053 100644
+--- a/security/apparmor/include/apparmorfs.h
++++ b/security/apparmor/include/apparmorfs.h
+@@ -70,6 +70,7 @@ enum aafs_ns_type {
+ 	AAFS_NS_DIR,
+ 	AAFS_NS_PROFS,
+ 	AAFS_NS_NS,
++	AAFS_NS_RAW_DATA,
+ 	AAFS_NS_COUNT,
+ 	AAFS_NS_MAX_COUNT,
+ 	AAFS_NS_SIZE,
+@@ -85,12 +86,16 @@ enum aafs_prof_type {
+ 	AAFS_PROF_MODE,
+ 	AAFS_PROF_ATTACH,
+ 	AAFS_PROF_HASH,
++	AAFS_PROF_RAW_DATA,
++	AAFS_PROF_RAW_HASH,
++	AAFS_PROF_RAW_ABI,
+ 	AAFS_PROF_SIZEOF,
+ };
+ 
+ #define ns_dir(X) ((X)->dents[AAFS_NS_DIR])
+ #define ns_subns_dir(X) ((X)->dents[AAFS_NS_NS])
+ #define ns_subprofs_dir(X) ((X)->dents[AAFS_NS_PROFS])
++#define ns_subdata_dir(X) ((X)->dents[AAFS_NS_RAW_DATA])
+ 
+ #define prof_dir(X) ((X)->dents[AAFS_PROF_DIR])
+ #define prof_child_dir(X) ((X)->dents[AAFS_PROF_PROFS])
+diff --git a/security/apparmor/include/crypto.h b/security/apparmor/include/crypto.h
+index dc418e5024d9..c1469f8db174 100644
+--- a/security/apparmor/include/crypto.h
++++ b/security/apparmor/include/crypto.h
+@@ -18,9 +18,14 @@
+ 
+ #ifdef CONFIG_SECURITY_APPARMOR_HASH
+ unsigned int aa_hash_size(void);
++char *aa_calc_hash(void *data, size_t len);
+ int aa_calc_profile_hash(struct aa_profile *profile, u32 version, void *start,
+ 			 size_t len);
+ #else
++static inline char *aa_calc_hash(void *data, size_t len)
++{
++	return NULL;
++}
+ static inline int aa_calc_profile_hash(struct aa_profile *profile, u32 version,
+ 				       void *start, size_t len)
+ {
+diff --git a/security/apparmor/include/policy.h b/security/apparmor/include/policy.h
+index 0686712d38ef..657d1a52b66f 100644
+--- a/security/apparmor/include/policy.h
++++ b/security/apparmor/include/policy.h
+@@ -149,6 +149,7 @@ struct aa_profile {
+ 	struct aa_net net;
+ 	struct aa_rlimit rlimits;
+ 
++	struct aa_loaddata *rawdata;
+ 	unsigned char *hash;
+ 	char *dirname;
+ 	struct dentry *dents[AAFS_PROF_SIZEOF];
+@@ -184,8 +185,8 @@ struct aa_profile *aa_fqlookupn_profile(struct aa_label *base,
+ 					const char *fqname, size_t n);
+ struct aa_profile *aa_match_profile(struct aa_ns *ns, const char *name);
+ 
+-ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+-			    size_t size);
++ssize_t aa_replace_profiles(struct aa_label *label, u32 mask,
++			    struct aa_loaddata *udata);
+ ssize_t aa_remove_profiles(struct aa_label *label, char *name, size_t size);
+ void __aa_profile_list_release(struct list_head *head);
+ 
+diff --git a/security/apparmor/include/policy_unpack.h b/security/apparmor/include/policy_unpack.h
+index c2f7a96029b6..4c1319eebc42 100644
+--- a/security/apparmor/include/policy_unpack.h
++++ b/security/apparmor/include/policy_unpack.h
+@@ -16,6 +16,7 @@
+ #define __POLICY_INTERFACE_H
+ 
+ #include <linux/list.h>
++#include <linux/kref.h>
+ 
+ struct aa_load_ent {
+ 	struct list_head list;
+@@ -35,6 +36,30 @@ struct aa_load_ent *aa_load_ent_alloc(void);
+ #define PACKED_MODE_KILL	2
+ #define PACKED_MODE_UNCONFINED	3
+ 
+-int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns);
++/* struct aa_loaddata - buffer of policy load data set */
++struct aa_loaddata {
++	struct kref count;
++	size_t size;
++	int abi;
++	unsigned char *hash;
++	char data[];
++};
++
++int aa_unpack(struct aa_loaddata *udata, struct list_head *lh, const char **ns);
++
++static inline struct aa_loaddata *
++aa_get_loaddata(struct aa_loaddata *data)
++{
++	if (data)
++		kref_get(&(data->count));
++	return data;
++}
++
++void aa_loaddata_kref(struct kref *kref);
++static inline void aa_put_loaddata(struct aa_loaddata *data)
++{
++	if (data)
++		kref_put(&data->count, aa_loaddata_kref);
++}
+ 
+ #endif /* __POLICY_INTERFACE_H */
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 4d860d8758d2..fa85b7497bc0 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -243,6 +243,8 @@ void aa_free_profile(struct aa_profile *profile)
+ 	}
+ 
+ 	kzfree(profile->hash);
++	aa_put_loaddata(profile->rawdata);
++
+ 	kzfree(profile);
+ }
+ 
+@@ -840,7 +842,6 @@ static struct aa_profile *update_to_newest_parent(struct aa_profile *new)
+  * @label: label that is attempting to load/replace policy
+  * @mask: permission mask
+  * @udata: serialized data stream  (NOT NULL)
+- * @size: size of the serialized data stream
+  *
+  * unpack and replace a profile on the profile list and uses of that profile
+  * by any aa_task_ctx.  If the profile does not exist on the profile list
+@@ -848,8 +849,8 @@ static struct aa_profile *update_to_newest_parent(struct aa_profile *new)
+  *
+  * Returns: size of data consumed else error code on failure.
+  */
+-ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+-			    size_t size)
++ssize_t aa_replace_profiles(struct aa_label *label, u32 mask,
++			    struct aa_loaddata *udata)
+ {
+ 	const char *ns_name, *info = NULL;
+ 	struct aa_ns *ns = NULL;
+@@ -860,7 +861,7 @@ ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+ 	LIST_HEAD(lh);
+ 
+ 	/* released below */
+-	error = aa_unpack(udata, size, &lh, &ns_name);
++	error = aa_unpack(udata, &lh, &ns_name);
+ 	if (error)
+ 		goto out;
+ 
+@@ -903,6 +904,7 @@ ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+ 	list_for_each_entry(ent, &lh, list) {
+ 		struct aa_policy *policy;
+ 
++		ent->new->rawdata = aa_get_loaddata(udata);
+ 		error = __lookup_replace(ns, ent->new->base.hname,
+ 					 !(mask & AA_MAY_REPLACE_POLICY),
+ 					 &ent->old, &info);
+@@ -995,7 +997,7 @@ ssize_t aa_replace_profiles(struct aa_label *label, u32 mask, void *udata,
+ 
+ 	if (error)
+ 		return error;
+-	return size;
++	return udata->size;
+ 
+ fail_lock:
+ 	mutex_unlock(&ns->lock);
+diff --git a/security/apparmor/policy_unpack.c b/security/apparmor/policy_unpack.c
+index 029ae1421478..da7b81f63616 100644
+--- a/security/apparmor/policy_unpack.c
++++ b/security/apparmor/policy_unpack.c
+@@ -125,6 +125,15 @@ static int audit_iface(struct aa_profile *new, const char *ns_name,
+ 	return aa_audit(AUDIT_APPARMOR_STATUS, profile, &sa, audit_cb);
+ }
+ 
++void aa_loaddata_kref(struct kref *kref)
++{
++	struct aa_loaddata *d = container_of(kref, struct aa_loaddata, count);
++	if (d) {
++		kzfree(d->hash);
++		kvfree(d);
++	}
++}
++
+ /* test if read will be in packed data bounds */
+ static bool inbounds(struct aa_ext *e, size_t size)
+ {
+@@ -894,7 +903,6 @@ struct aa_load_ent *aa_load_ent_alloc(void)
+ /**
+  * aa_unpack - unpack packed binary profile(s) data loaded from user space
+  * @udata: user data copied to kmem  (NOT NULL)
+- * @size: the size of the user data
+  * @lh: list to place unpacked profiles in a aa_repl_ws
+  * @ns: Returns namespace profile is in if specified else NULL (NOT NULL)
+  *
+@@ -904,15 +912,15 @@ struct aa_load_ent *aa_load_ent_alloc(void)
+  *
+  * Returns: profile(s) on @lh else error pointer if fails to unpack
+  */
+-int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns)
++int aa_unpack(struct aa_loaddata *udata, struct list_head *lh, const char **ns)
+ {
+ 	struct aa_load_ent *tmp, *ent;
+ 	struct aa_profile *profile = NULL;
+ 	int error;
+ 	struct aa_ext e = {
+-		.start = udata,
+-		.end = udata + size,
+-		.pos = udata,
++		.start = udata->data,
++		.end = udata->data + udata->size,
++		.pos = udata->data,
+ 	};
+ 
+ 	*ns = NULL;
+@@ -922,7 +930,6 @@ int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns)
+ 		error = verify_header(&e, e.pos == e.start, ns);
+ 		if (error)
+ 			goto fail;
+-
+ 		start = e.pos;
+ 		profile = unpack_profile(&e, &ns_name);
+ 		if (IS_ERR(profile)) {
+@@ -950,7 +957,15 @@ int aa_unpack(void *udata, size_t size, struct list_head *lh, const char **ns)
+ 		ent->ns_name = ns_name;
+ 		list_add_tail(&ent->list, lh);
+ 	}
+-
++	udata->abi = e.version & K_ABI_MASK;
++	if (aa_g_hash_policy) {
++		udata->hash = aa_calc_hash(udata->data, udata->size);
++		if (IS_ERR(udata->hash)) {
++			error = PTR_ERR(udata->hash);
++			udata->hash = NULL;
++			goto fail;
++		}
++	}
+ 	return 0;
+ 
+ fail_profile:
+-- 
+2.17.1
+

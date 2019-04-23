@@ -1,0 +1,253 @@
+From 54127822ba4788efea58de744fc981a5aed150ac Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 31 Mar 2017 05:05:07 -0700
+Subject: [PATCH 56/57] UBUNTU: SAUCE: apparmor: add policy revision file
+ interface
+
+Add a policy revision file to find the current revision of a ns's policy.
+There is a revision file per ns, as well as a virtualized global revision
+file in the base apparmor fs directory. The global revision file when
+opened will provide the revision of the opening task namespace.
+
+The revision file can be waited on via select/poll to detect apparmor
+policy changes from the last read revision of the opened file. This
+means that the revision file must be read after the select/poll other
+wise update data will remain ready for reading.
+
+BugLink: http://bugs.launchpad.net/bugs/1678032
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c         | 112 +++++++++++++++++++++++++
+ security/apparmor/include/apparmorfs.h |   3 +
+ security/apparmor/include/policy_ns.h  |   3 +
+ security/apparmor/policy.c             |   3 +
+ security/apparmor/policy_ns.c          |   1 +
+ 5 files changed, 122 insertions(+)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index 2ae58fd5c116..5c07e57da706 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -220,6 +220,100 @@ static const struct file_operations aa_fs_profile_remove = {
+ 	.llseek = default_llseek,
+ };
+ 
++struct aa_revision {
++	struct aa_ns *ns;
++	long last_read;
++};
++
++/* revision file hook fn for policy loads */
++static int ns_revision_release(struct inode *inode, struct file *file)
++{
++	struct aa_revision *rev = file->private_data;
++
++	if (rev) {
++		aa_put_ns(rev->ns);
++		kfree(rev);
++	}
++
++	return 0;
++}
++
++static ssize_t ns_revision_read(struct file *file, char __user *buf,
++				size_t size, loff_t *ppos)
++{
++	struct aa_revision *rev = file->private_data;
++	char buffer[32];
++	long last_read;
++	int avail;
++
++	mutex_lock(&rev->ns->lock);
++	last_read = rev->last_read;
++	if (last_read == rev->ns->revision) {
++		mutex_unlock(&rev->ns->lock);
++		if (file->f_flags & O_NONBLOCK)
++			return -EAGAIN;
++		if (wait_event_interruptible(rev->ns->wait,
++					     last_read !=
++					     READ_ONCE(rev->ns->revision)))
++			return -ERESTARTSYS;
++		mutex_lock(&rev->ns->lock);
++	}
++
++	avail = sprintf(buffer, "%ld\n", rev->ns->revision);
++	if (*ppos + size > avail) {
++		rev->last_read = rev->ns->revision;
++		*ppos = 0;
++	}
++	mutex_unlock(&rev->ns->lock);
++
++	return simple_read_from_buffer(buf, size, ppos, buffer, avail);
++}
++
++static int ns_revision_open(struct inode *inode, struct file *file)
++{
++	struct aa_revision *rev = kzalloc(sizeof(*rev), GFP_KERNEL);
++
++	if (!rev)
++		return -ENOMEM;
++
++	rev->ns = aa_get_ns(inode->i_private);
++	if (!rev->ns)
++		rev->ns = aa_get_current_ns();
++	file->private_data = rev;
++
++	return 0;
++}
++
++static unsigned int ns_revision_poll(struct file *file, poll_table *pt)
++{
++	struct aa_revision *rev = file->private_data;
++	unsigned int mask = 0;
++
++	if (rev) {
++		mutex_lock(&rev->ns->lock);
++		poll_wait(file, &rev->ns->wait, pt);
++		if (rev->last_read < rev->ns->revision)
++			mask |= POLLIN | POLLRDNORM;
++		mutex_unlock(&rev->ns->lock);
++	}
++
++	return mask;
++}
++
++void __aa_bump_ns_revision(struct aa_ns *ns)
++{
++	ns->revision++;
++	wake_up_interruptible(&ns->wait);
++}
++
++static const struct file_operations ns_revision_fops = {
++	.owner		= THIS_MODULE,
++	.open		= ns_revision_open,
++	.poll		= ns_revision_poll,
++	.read		= ns_revision_read,
++	.llseek		= generic_file_llseek,
++	.release	= ns_revision_release,
++};
+ 
+ static void profile_query_cb(struct aa_profile *profile, struct aa_perms *perms,
+ 			     const char *match_str, size_t match_len)
+@@ -1153,6 +1247,10 @@ void __aa_fs_ns_rmdir(struct aa_ns *ns)
+ 		sub = d_inode(ns_subremove(ns))->i_private;
+ 		aa_put_ns(sub);
+ 	}
++	if (ns_subrevision(ns)) {
++		sub = d_inode(ns_subrevision(ns))->i_private;
++		aa_put_ns(sub);
++	}
+ 
+ 	for (i = AAFS_NS_SIZEOF - 1; i >= 0; --i) {
+ 		securityfs_remove(ns->dents[i]);
+@@ -1178,6 +1276,12 @@ static int __aa_fs_ns_mkdir_entries(struct aa_ns *ns, struct dentry *dir)
+ 		return PTR_ERR(dent);
+ 	ns_subdata_dir(ns) = dent;
+ 
++	dent = securityfs_create_file("revision", 0444, dir, ns,
++				      &ns_revision_fops);
++	if (IS_ERR(dent))
++		return PTR_ERR(dent);
++	ns_subrevision(ns) = dent;
++
+ 	dent = securityfs_create_file(".load", 0666, dir, ns,
+ 				      &aa_fs_profile_load);
+ 	if (IS_ERR(dent))
+@@ -1802,6 +1906,14 @@ static int __init aa_create_aafs(void)
+ 	}
+ 	ns_subremove(root_ns) = dent;
+ 
++	dent = securityfs_create_file("revision", 0444, aa_fs_entry.dentry,
++				      NULL, &ns_revision_fops);
++	if (IS_ERR(dent)) {
++		error = PTR_ERR(dent);
++		goto error;
++	}
++	ns_subrevision(root_ns) = dent;
++
+ 	mutex_lock(&root_ns->lock);
+ 	error = __aa_fs_ns_mkdir(root_ns, aa_fs_entry.dentry, "policy", NULL);
+ 	mutex_unlock(&root_ns->lock);
+diff --git a/security/apparmor/include/apparmorfs.h b/security/apparmor/include/apparmorfs.h
+index bec1cc4357d1..b25d822d1727 100644
+--- a/security/apparmor/include/apparmorfs.h
++++ b/security/apparmor/include/apparmorfs.h
+@@ -74,6 +74,7 @@ enum aafs_ns_type {
+ 	AAFS_NS_LOAD,
+ 	AAFS_NS_REPLACE,
+ 	AAFS_NS_REMOVE,
++	AAFS_NS_REVISION,
+ 	AAFS_NS_COUNT,
+ 	AAFS_NS_MAX_COUNT,
+ 	AAFS_NS_SIZE,
+@@ -102,10 +103,12 @@ enum aafs_prof_type {
+ #define ns_subload(X) ((X)->dents[AAFS_NS_LOAD])
+ #define ns_subreplace(X) ((X)->dents[AAFS_NS_REPLACE])
+ #define ns_subremove(X) ((X)->dents[AAFS_NS_REMOVE])
++#define ns_subrevision(X) ((X)->dents[AAFS_NS_REVISION])
+ 
+ #define prof_dir(X) ((X)->dents[AAFS_PROF_DIR])
+ #define prof_child_dir(X) ((X)->dents[AAFS_PROF_PROFS])
+ 
++void __aa_bump_ns_revision(struct aa_ns *ns);
+ void __aa_fs_profile_rmdir(struct aa_profile *profile);
+ void __aa_fs_profile_migrate_dents(struct aa_profile *old,
+ 				   struct aa_profile *new);
+diff --git a/security/apparmor/include/policy_ns.h b/security/apparmor/include/policy_ns.h
+index 4c16c9acdbcf..e11380b13b5c 100644
+--- a/security/apparmor/include/policy_ns.h
++++ b/security/apparmor/include/policy_ns.h
+@@ -68,6 +68,9 @@ struct aa_ns {
+ 	atomic_t uniq_null;
+ 	long uniq_id;
+ 	int level;
++	long revision;
++	wait_queue_head_t wait;
++
+ 	struct aa_labelset labels;
+ 
+ 	struct dentry *dents[AAFS_NS_SIZEOF];
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index f5f286ab70b4..52ccd0e3148f 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -1004,6 +1004,7 @@ ssize_t aa_replace_profiles(struct aa_ns *view, struct aa_label *label,
+ 		aa_load_ent_free(ent);
+ 	}
+ 	__aa_labelset_update_subtree(ns);
++	__aa_bump_ns_revision(ns);
+ 	mutex_unlock(&ns->lock);
+ 
+ out:
+@@ -1087,6 +1088,7 @@ ssize_t aa_remove_profiles(struct aa_ns *view, struct aa_label *label,
+ 		/* remove namespace - can only happen if fqname[0] == ':' */
+ 		mutex_lock(&ns->parent->lock);
+ 		__aa_remove_ns(ns);
++		__aa_bump_ns_revision(ns);
+ 		mutex_unlock(&ns->parent->lock);
+ 	} else {
+ 		/* remove profile */
+@@ -1100,6 +1102,7 @@ ssize_t aa_remove_profiles(struct aa_ns *view, struct aa_label *label,
+ 		name = profile->base.hname;
+ 		__remove_profile(profile);
+ 		__aa_labelset_update_subtree(ns);
++		__aa_bump_ns_revision(ns);
+ 		mutex_unlock(&ns->lock);
+ 	}
+ 
+diff --git a/security/apparmor/policy_ns.c b/security/apparmor/policy_ns.c
+index 88043fcfad8e..e46d0926737e 100644
+--- a/security/apparmor/policy_ns.c
++++ b/security/apparmor/policy_ns.c
+@@ -100,6 +100,7 @@ static struct aa_ns *alloc_ns(const char *prefix, const char *name)
+ 
+ 	INIT_LIST_HEAD(&ns->sub_ns);
+ 	mutex_init(&ns->lock);
++	init_waitqueue_head(&ns->wait);
+ 
+ 	/* released by free_namespace */
+ 	ns->unconfined = aa_alloc_profile("unconfined", NULL, GFP_KERNEL);
+-- 
+2.17.1
+

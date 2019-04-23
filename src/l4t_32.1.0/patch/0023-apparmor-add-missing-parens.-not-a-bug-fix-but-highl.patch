@@ -1,0 +1,29 @@
+From 4d21f00c4a41ed8cbd5fd7e431def15c1061db36 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 18 Mar 2016 08:42:41 -0700
+Subject: [PATCH 23/57] apparmor: add missing parens. not a bug fix but highly
+ recommended
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/domain.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
+index a701534abda2..ee4b6ef23930 100644
+--- a/security/apparmor/domain.c
++++ b/security/apparmor/domain.c
+@@ -731,7 +731,7 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
+ 	 * subsets are allowed even when no_new_privs is set because this
+ 	 * aways results in a further reduction of permissions.
+ 	 */
+-	if (bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS &&
++	if ((bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS) &&
+ 	    !unconfined(label) && !aa_label_is_subset(new, label)) {
+ 		error = -EPERM;
+ 		info = "no new privs";
+-- 
+2.17.1
+

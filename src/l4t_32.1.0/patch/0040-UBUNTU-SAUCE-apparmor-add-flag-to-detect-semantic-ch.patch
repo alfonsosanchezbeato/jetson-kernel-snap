@@ -1,0 +1,45 @@
+From 19872c709b58e001871250795d81ac03d056389b Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Mon, 3 Oct 2016 17:27:09 -0700
+Subject: [PATCH 40/57] UBUNTU: SAUCE: apparmor: add flag to detect semantic
+ change, to binfmt_elf mmap
+
+commit 9f834ec18defc369d73ccf9e87a2790bfa05bf46 changed when the creds
+are installed by the binfmt_elf handler. This affects which creds
+are used to mmap the executable into the address space. Which can have
+an affect on apparmor policy.
+
+Add a flag to apparmor at
+/sys/kernel/security/apparmor/features/domain/fix_binfmt_elf_mmap
+
+to make it possible to detect this semantic change so that the userspace
+tools and the regression test suite can correctly deal with the change.
+
+Note: since 9f834ec1 is a potential information leak fix for prof
+events and tracing, it is expected that it could be picked up by
+kernels earlier kernels than 4.8 so that detecting the kernel version
+is not sufficient.
+
+BugLink: http://bugs.launchpad.net/bugs/1630069
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Acked-by: Brad Figg <brad.figg@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index ff3d6138f36a..0904483e0f19 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -1530,6 +1530,7 @@ static struct aa_fs_entry aa_fs_entry_domain[] = {
+ 	AA_FS_FILE_BOOLEAN("change_onexec",	1),
+ 	AA_FS_FILE_BOOLEAN("change_profile",	1),
+ 	AA_FS_FILE_BOOLEAN("stack",		1),
++	AA_FS_FILE_BOOLEAN("fix_binfmt_elf_mmap",	1),
+ 	AA_FS_FILE_STRING("version", "1.2"),
+ 	{ }
+ };
+-- 
+2.17.1
+

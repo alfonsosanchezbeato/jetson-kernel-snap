@@ -1,0 +1,36 @@
+From 883095f055e04e1ead35fc94e800d1a1f3b18417 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 31 Mar 2017 05:05:06 -0700
+Subject: [PATCH 55/57] UBUNTU: SAUCE: apparmor: add label data availability to
+ the feature set
+
+gsettings mediation needs to be able to determine if apparmor supports
+label data queries. A label data query can be done to test for support
+but its failure is indistinguishable from other failures, making it an
+unreliable indicator.
+
+Fix by making support of label data queries available as a flag in the
+apparmorfs features dir tree.
+
+BugLink: http://bugs.launchpad.net/bugs/1678023
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/apparmorfs.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index 7147b33a5eff..2ae58fd5c116 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -1568,6 +1568,7 @@ static struct aa_fs_entry aa_fs_entry_dbus[] = {
+ 
+ static struct aa_fs_entry aa_fs_entry_query_label[] = {
+ 	AA_FS_FILE_STRING("perms", "allow deny audit quiet"),
++	AA_FS_FILE_BOOLEAN("data",		1),
+ 	{ }
+ };
+ 
+-- 
+2.17.1
+

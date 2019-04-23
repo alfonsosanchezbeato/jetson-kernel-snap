@@ -1,0 +1,31 @@
+From b0f0bf47a27df3f91f4056a875f9f0b2d10717ed Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 12 Aug 2016 08:08:33 -0700
+Subject: [PATCH 26/57] apparmor: default to allowing unprivileged userns
+ policy
+
+To disable set kernel/unprivileged_userns_apparmor_policy = 0
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/policy.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 52abc2fa76b6..562c8a7cd6e9 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -90,7 +90,7 @@
+ #include "include/policy_unpack.h"
+ #include "include/resource.h"
+ 
+-int unprivileged_userns_apparmor_policy = 0;
++int unprivileged_userns_apparmor_policy = 1;
+ 
+ /* Note: mode names must be unique in the first character because of
+  *       modechrs used to print modes on compound labels on some interfaces
+-- 
+2.17.1
+

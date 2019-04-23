@@ -1,0 +1,37 @@
+From c5fa9d654c42530148e4d64bac80fe3e5cabba69 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Thu, 21 Jul 2016 11:12:38 -0700
+Subject: [PATCH 09/57] UBUNTU: SAUCE: apparmor: fix stack trace when removing
+ namespace with profiles
+
+BugLink: http://bugs.launchpad.net/bugs/1593874
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Leann Ogasawara <leann.ogasawara@canonical.com>
+Signed-off-by: Tim Gardner <tim.gardner@canonical.com>
+---
+ security/apparmor/policy_ns.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/security/apparmor/policy_ns.c b/security/apparmor/policy_ns.c
+index d06e66413745..19adb24d00a0 100644
+--- a/security/apparmor/policy_ns.c
++++ b/security/apparmor/policy_ns.c
+@@ -259,9 +259,13 @@ static void destroy_ns(struct aa_ns *ns)
+ 	/* release all sub namespaces */
+ 	__ns_list_release(&ns->sub_ns);
+ 
+-	if (ns->parent)
++	if (ns->parent) {
++		unsigned long flags;
++		write_lock_irqsave(&ns->labels.lock, flags);
+ 		__aa_proxy_redirect(ns_unconfined(ns),
+ 				    ns_unconfined(ns->parent));
++		write_unlock_irqrestore(&ns->labels.lock, flags);
++	}
+ 	__aa_fs_ns_rmdir(ns);
+ 	mutex_unlock(&ns->lock);
+ }
+-- 
+2.17.1
+

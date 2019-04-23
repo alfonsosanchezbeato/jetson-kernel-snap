@@ -1,0 +1,25 @@
+From 0e359d1fae6d9cedcc32c2f5ece2b1b2ba2e08c5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Mon, 22 Apr 2019 16:09:22 +0200
+Subject: [PATCH] UBUNTU: SAUCE: do not add debug info to binaries
+
+---
+ arch/arm64/configs/tegra_defconfig | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/arch/arm64/configs/tegra_defconfig b/arch/arm64/configs/tegra_defconfig
+index 9fc976036694..fa6cbd5df0a8 100644
+--- a/arch/arm64/configs/tegra_defconfig
++++ b/arch/arm64/configs/tegra_defconfig
+@@ -1078,7 +1078,6 @@ CONFIG_NLS_ISO8859_1=y
+ CONFIG_VIRTUALIZATION=y
+ CONFIG_PRINTK_TIME=y
+ CONFIG_DYNAMIC_DEBUG=y
+-CONFIG_DEBUG_INFO=y
+ CONFIG_DEBUG_SECTION_MISMATCH=y
+ # CONFIG_SECTION_MISMATCH_WARN_ONLY is not set
+ CONFIG_MAGIC_SYSRQ=y
+-- 
+2.17.1
+
