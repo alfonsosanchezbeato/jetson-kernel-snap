@@ -5,6 +5,7 @@ description: nvidia Jetson Nano kernel
 grade: stable
 confinement: strict
 type: kernel
+base: core18
 architectures: [ arm64 ]
 
 parts:
