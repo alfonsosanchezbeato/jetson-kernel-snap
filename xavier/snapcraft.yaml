@@ -1,0 +1,57 @@
+name: jetson-xavier-kernel
+version: 4.9-tegra-l4t-r32.2.1
+summary: nvidia Jetson Xavier kernel
+description: nvidia Jetson Xavier kernel
+grade: stable
+confinement: strict
+type: kernel
+build-base: kernel
+architectures: [ arm64 ]
+
+parts:
+  kernel:
+    plugin: nil
+    source: ../src
+    override-pull: |
+      snapcraftctl pull
+      # Get kernel sources, which are distributed across different repos
+      mv l4t_32.2.1/source_sync.sh .
+      ./source_sync.sh -k tegra-l4t-r32.2.1
+      # Apply canonical patches - apparmor stuff essentially
+      cd sources/kernel/kernel-4.9
+      # All 32.1.0 patches apply cleanly - still use them
+      git am ../../../l4t_32.1.0/patch/*
+    override-build: |
+      JETSON_KERNEL_CONFIG=tegra_defconfig ./build.sh
+    build-packages:
+      - lsb-release
+      - bc
+      - git
+      - libssl-dev
+      - rsync
+      - lzop
+      - gcc-aarch64-linux-gnu
+      - jq
+      - squashfs-tools
+      - curl
+      - build-essential
+
+  firmware:
+    after: [ kernel ]
+    plugin: nil
+    override-build: |
+      set -xe
+      wget https://developer.nvidia.com/embedded/dlc/r32-2-1_Release_v1.0/TX2-AGX/Tegra186_Linux_R32.2.1_aarch64.tbz2 \
+        -O Tegra186_Linux_R32.2.1_aarch64.tbz2
+      tar xf Tegra186_Linux_R32.2.1_aarch64.tbz2 Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2
+      tar xf Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2 lib/firmware/
+      cd lib; cp -r firmware/ "$SNAPCRAFT_PART_INSTALL"
+
+  initramfs:
+    after: [ kernel, firmware ]
+    plugin: nil
+    source: ../initramfs
+    override-build: |
+      mkdir -p lib/firmware
+      cp "$SNAPCRAFT_STAGE"/firmware/tegra*_xusb_firmware lib/firmware/
+      find . | cpio --quiet -o -H newc | lzma >> "$SNAPCRAFT_STAGE"/initrd.img

@@ -13,3 +13,8 @@
 /nano/stage/
 /nano/snap/.snapcraft
 /nano/jetson-nano-kernel_*_arm64.snap
+/xavier/parts/
+/xavier/prime/
+/xavier/stage/
+/xavier/snap/.snapcraft
+/xavier/jetson-xavier-kernel_*_arm64.snap
