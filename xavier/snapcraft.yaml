@@ -43,7 +43,7 @@ parts:
       set -xe
       wget https://developer.nvidia.com/embedded/dlc/r32-2-1_Release_v1.0/TX2-AGX/Tegra186_Linux_R32.2.1_aarch64.tbz2 \
         -O Tegra186_Linux_R32.2.1_aarch64.tbz2
-      tar xf Tegra186_Linux_R32.2.1_aarch64.tbz2 Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2
+      tar xf Tegra186_Linux_R32.2.1_aarch64.tbz2
       tar xf Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2 lib/firmware/
       cd lib; cp -r firmware/ "$SNAPCRAFT_PART_INSTALL"
 
@@ -55,3 +55,25 @@ parts:
       mkdir -p lib/firmware
       cp "$SNAPCRAFT_STAGE"/firmware/tegra*_xusb_firmware lib/firmware/
       find . | cpio --quiet -o -H newc | lzma >> "$SNAPCRAFT_STAGE"/initrd.img
+
+  # Create (signed) aboot image
+  abootimg:
+    after: [ initramfs ]
+    plugin: nil
+    source: boot/
+    source-type: local
+    build-packages:
+      - abootimg
+    override-build: |
+      set -ex
+      BOOT_IMG=boot.img
+      abootimg --create $BOOT_IMG -f bootimg.cfg -k "$SNAPCRAFT_STAGE"/kernel.img \
+          -r "$SNAPCRAFT_STAGE"/initrd.img
+      FLASH_D=../../firmware/build/Linux_for_Tegra/bootloader
+      mv $BOOT_IMG $FLASH_D
+      cd $FLASH_D
+      ./tegraflash.py --chip 0x19 --key None --cmd "sign $BOOT_IMG"
+      mv boot_sigheader.img.encrypt "$SNAPCRAFT_STAGE"/boot.img
+    override-prime: |
+      set -ex
+      cp "$SNAPCRAFT_STAGE"/boot.img "$SNAPCRAFT_PRIME"/
