@@ -47,13 +47,42 @@ parts:
       tar xf Linux_for_Tegra/nv_tegra/nvidia_drivers.tbz2 lib/firmware/
       cd lib; cp -r firmware/ "$SNAPCRAFT_PART_INSTALL"
 
-  initramfs:
-    after: [ kernel, firmware ]
+  waitrandom:
+    source: ../waitrandom
+    source-type: local
     plugin: nil
+    override-build: |
+      set -x
+      if [ -x "/usr/bin/arm-linux-gnueabihf-gcc" ]; then
+          aarch64-linux-gnu-gcc -o waitrandom -Wall -Werror waitrandom.c
+      else
+          gcc -o waitrandom -Wall -Werror waitrandom.c
+      fi
+    build-packages:
+      - build-essential
+      - on amd64 to arm64:
+        - gcc-aarch64-linux-gnu:amd64
+
+  initramfs:
+    after: [ kernel, firmware, waitrandom ]
+    plugin: nil
+    build-packages:
+      - dpkg
+      - wget
     source: ../initramfs
     override-build: |
+      set -ex
       mkdir -p lib/firmware
       cp "$SNAPCRAFT_STAGE"/firmware/tegra*_xusb_firmware lib/firmware/
+      # Copy haveged so we can speed up seeding of rng
+      mkdir sbin bin
+      mkdir lib/aarch64-linux-gnu
+      cp ../../waitrandom/build/waitrandom bin/
+      "$SNAPCRAFT_PROJECT_DIR"/get-packages.sh haveged libhavege1
+      cd unpack
+      cp usr/sbin/haveged ../sbin/
+      cp -a usr/lib/aarch64-linux-gnu/libhavege* ../lib/aarch64-linux-gnu/
+      cd -; rm -rf unpack
       find . | cpio --quiet -o -H newc | lzma >> "$SNAPCRAFT_STAGE"/initrd.img
 
   # Create (signed) aboot image
