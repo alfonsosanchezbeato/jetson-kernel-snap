@@ -1,0 +1,25 @@
+From cb80b4799f48cc771c3b65e175f0544519b4ca71 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Tue, 12 May 2020 09:57:26 +0200
+Subject: [PATCH 1/2] UBUNTU: SAUCE: add configuration needed by lxd
+
+---
+ arch/arm64/configs/tegra_defconfig | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/configs/tegra_defconfig b/arch/arm64/configs/tegra_defconfig
+index fa6cbd5df0a8..739973975da1 100644
+--- a/arch/arm64/configs/tegra_defconfig
++++ b/arch/arm64/configs/tegra_defconfig
+@@ -1122,3 +1122,7 @@ CONFIG_CRYPTO_AES_ARM64_NEON_BLK=y
+ CONFIG_ARCH_TEGRA_18x_SOC=y
+ CONFIG_ARCH_TEGRA_19x_SOC=y
+ CONFIG_ARCH_TEGRA_23x_SOC=y
++CONFIG_UNIX_DIAG=m
++CONFIG_PACKET_DIAG=m
++CONFIG_NETLINK_DIAG=m
++CONFIG_CHECKPOINT_RESTORE=y
+-- 
+2.25.1
+

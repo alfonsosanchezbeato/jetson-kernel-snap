@@ -1,0 +1,23 @@
+From 64d00e81d131c6411a3536464be74157bc0a448f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Tue, 12 May 2020 10:10:04 +0200
+Subject: [PATCH] UBUNTU: SAUCE: add configuration needed by multipass
+
+---
+ arch/arm64/configs/tegra_defconfig | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/configs/tegra_defconfig b/arch/arm64/configs/tegra_defconfig
+index 739973975da1..40807318d3e4 100644
+--- a/arch/arm64/configs/tegra_defconfig
++++ b/arch/arm64/configs/tegra_defconfig
+@@ -1126,3 +1126,5 @@ CONFIG_UNIX_DIAG=m
+ CONFIG_PACKET_DIAG=m
+ CONFIG_NETLINK_DIAG=m
+ CONFIG_CHECKPOINT_RESTORE=y
++CONFIG_KVM=y
++CONFIG_TEGRA_VIRTUALIZATION=y
+-- 
+2.17.1
+
