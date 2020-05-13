@@ -5,7 +5,7 @@ description: nvidia Jetson Xavier kernel
 grade: stable
 confinement: strict
 type: kernel
-build-base: kernel
+build-base: core18
 architectures: [ arm64 ]
 
 parts:
