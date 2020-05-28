@@ -1,0 +1,26 @@
+From 6f40d819d0b2acc92a0130b77b93fb618a54a94f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Thu, 28 May 2020 17:44:26 +0200
+Subject: [PATCH 5/6] Revert "ANDROID: sdcardfs: Add support for
+ d_canonical_path"
+
+This reverts commit a782a7946001d93a9d96523c9fc8bbcd32ef9d83.
+---
+ fs/sdcardfs/dentry.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/fs/sdcardfs/dentry.c b/fs/sdcardfs/dentry.c
+index f1f8af93e85a..dadeec6bb473 100644
+--- a/fs/sdcardfs/dentry.c
++++ b/fs/sdcardfs/dentry.c
+@@ -178,6 +178,5 @@ const struct dentry_operations sdcardfs_ci_dops = {
+ 	.d_release	= sdcardfs_d_release,
+ 	.d_hash	= sdcardfs_hash_ci,
+ 	.d_compare	= sdcardfs_cmp_ci,
+-	.d_canonical_path = sdcardfs_get_real_lower,
+ };
+ 
+-- 
+2.25.1
+

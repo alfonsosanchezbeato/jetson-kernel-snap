@@ -1,0 +1,66 @@
+From 61e7381e54b6fc744ba6f005478e6b5e566c43d8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Thu, 28 May 2020 17:44:03 +0200
+Subject: [PATCH 3/6] Revert "ANDROID: vfs: change d_canonical_path to take two
+ paths"
+
+This reverts commit 973117c6617fdaed5ad7add548dec15962074198.
+---
+ fs/notify/inotify/inotify_user.c | 2 +-
+ fs/sdcardfs/dentry.c             | 8 +-------
+ include/linux/dcache.h           | 2 +-
+ 3 files changed, 3 insertions(+), 9 deletions(-)
+
+diff --git a/fs/notify/inotify/inotify_user.c b/fs/notify/inotify/inotify_user.c
+index 4da5c6a1134f..ac32371e1fcd 100644
+--- a/fs/notify/inotify/inotify_user.c
++++ b/fs/notify/inotify/inotify_user.c
+@@ -746,7 +746,7 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
+ 	/* support stacked filesystems */
+ 	if(path.dentry && path.dentry->d_op) {
+ 		if (path.dentry->d_op->d_canonical_path) {
+-			path.dentry->d_op->d_canonical_path(&path, &alteredpath);
++			path.dentry->d_op->d_canonical_path(path.dentry, &alteredpath);
+ 			canonical_path = &alteredpath;
+ 			path_put(&path);
+ 		}
+diff --git a/fs/sdcardfs/dentry.c b/fs/sdcardfs/dentry.c
+index 776d549b397b..f1f8af93e85a 100644
+--- a/fs/sdcardfs/dentry.c
++++ b/fs/sdcardfs/dentry.c
+@@ -173,17 +173,11 @@ static int sdcardfs_cmp_ci(const struct dentry *dentry,
+ 	return 1;
+ }
+ 
+-static void sdcardfs_canonical_path(const struct path *path,
+-				struct path *actual_path)
+-{
+-	sdcardfs_get_real_lower(path->dentry, actual_path);
+-}
+-
+ const struct dentry_operations sdcardfs_ci_dops = {
+ 	.d_revalidate	= sdcardfs_d_revalidate,
+ 	.d_release	= sdcardfs_d_release,
+ 	.d_hash	= sdcardfs_hash_ci,
+ 	.d_compare	= sdcardfs_cmp_ci,
+-	.d_canonical_path = sdcardfs_canonical_path,
++	.d_canonical_path = sdcardfs_get_real_lower,
+ };
+ 
+diff --git a/include/linux/dcache.h b/include/linux/dcache.h
+index 014d7f9ac615..3d6cbd44dcfd 100644
+--- a/include/linux/dcache.h
++++ b/include/linux/dcache.h
+@@ -142,7 +142,7 @@ struct dentry_operations {
+ 	int (*d_manage)(struct dentry *, bool);
+ 	struct dentry *(*d_real)(struct dentry *, const struct inode *,
+ 				 unsigned int);
+-	void (*d_canonical_path)(const struct path *, struct path *);
++	void (*d_canonical_path)(const struct dentry *, struct path *);
+ } ____cacheline_aligned;
+ 
+ /*
+-- 
+2.25.1
+

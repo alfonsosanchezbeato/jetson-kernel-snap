@@ -1,0 +1,40 @@
+From 75c8722da2016074a4bfcdf6afe43f249ebd24ae Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Thu, 28 May 2020 17:38:40 +0200
+Subject: [PATCH 1/6] Revert "ANDROID: fsnotify: Notify lower fs of open"
+
+This reverts commit d3027f247d79ab03536e2fb4828adb9f2cec18ac.
+---
+ include/linux/fsnotify.h | 8 --------
+ 1 file changed, 8 deletions(-)
+
+diff --git a/include/linux/fsnotify.h b/include/linux/fsnotify.h
+index 35bdf797f6fd..ff08ac637c36 100644
+--- a/include/linux/fsnotify.h
++++ b/include/linux/fsnotify.h
+@@ -213,7 +213,6 @@ static inline void fsnotify_modify(struct file *file)
+ static inline void fsnotify_open(struct file *file)
+ {
+ 	struct path *path = &file->f_path;
+-	struct path lower_path;
+ 	struct inode *inode = path->dentry->d_inode;
+ 
+ 	__u32 mask = FS_OPEN;
+@@ -221,13 +220,6 @@ static inline void fsnotify_open(struct file *file)
+ 	if (S_ISDIR(inode->i_mode))
+ 		mask |= FS_ISDIR;
+ 
+-	if (path->dentry->d_op && path->dentry->d_op->d_canonical_path) {
+-		path->dentry->d_op->d_canonical_path(path, &lower_path);
+-		fsnotify_parent(&lower_path, NULL, mask);
+-		fsnotify(lower_path.dentry->d_inode, mask, &lower_path,
+-						FSNOTIFY_EVENT_PATH, NULL, 0);
+-		path_put(&lower_path);
+-	}
+ 	fsnotify_parent(path, NULL, mask);
+ 	fsnotify(inode, mask, path, FSNOTIFY_EVENT_PATH, NULL, 0);
+ }
+-- 
+2.25.1
+

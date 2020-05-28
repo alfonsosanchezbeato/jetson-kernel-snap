@@ -1,0 +1,28 @@
+From 82e6804642b0378567b3605e35c29b32d131c002 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Thu, 28 May 2020 17:44:17 +0200
+Subject: [PATCH 4/6] Revert "ANDROID: inotify: Fix erroneous update of bit
+ count"
+
+This reverts commit 835d38b4b5c3f9b82c62c2e9e9e2bbb0ab49ae16.
+---
+ fs/notify/inotify/inotify_user.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/notify/inotify/inotify_user.c b/fs/notify/inotify/inotify_user.c
+index ac32371e1fcd..01ab0bc5aecc 100644
+--- a/fs/notify/inotify/inotify_user.c
++++ b/fs/notify/inotify/inotify_user.c
+@@ -825,7 +825,7 @@ static int __init inotify_user_setup(void)
+ 	BUILD_BUG_ON(IN_ISDIR != FS_ISDIR);
+ 	BUILD_BUG_ON(IN_ONESHOT != FS_IN_ONESHOT);
+ 
+-	BUG_ON(hweight32(ALL_INOTIFY_BITS) != 21);
++	BUG_ON(hweight32(ALL_INOTIFY_BITS) != 22);
+ 
+ 	inotify_inode_mark_cachep = KMEM_CACHE(inotify_inode_mark, SLAB_PANIC);
+ 
+-- 
+2.25.1
+
