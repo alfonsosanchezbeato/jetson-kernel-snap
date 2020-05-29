@@ -1,0 +1,140 @@
+From 88e2228eb13273037dcba602f5a92c644acdd003 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Alfonso=20S=C3=A1nchez-Beato?=
+ <alfonso.sanchez-beato@canonical.com>
+Date: Fri, 29 May 2020 14:59:49 +0200
+Subject: [PATCH 3/3] Fix previous net reverts
+
+The reverts are not clean as nvidia decided to merge upstream 4.9
+instead of rebasing their patches...
+---
+ net/ipv4/af_inet.c  | 30 ++----------------------------
+ net/ipv6/af_inet6.c | 30 ++----------------------------
+ 2 files changed, 4 insertions(+), 56 deletions(-)
+
+diff --git a/net/ipv4/af_inet.c b/net/ipv4/af_inet.c
+index b4d38f7c20bb..caa30af44399 100644
+--- a/net/ipv4/af_inet.c
++++ b/net/ipv4/af_inet.c
+@@ -261,29 +261,6 @@ int inet_listen(struct socket *sock, int backlog)
+ }
+ EXPORT_SYMBOL(inet_listen);
+ 
+-#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+-static inline int current_has_network(void)
+-{
+-	return (!current_euid() || in_egroup_p(AID_INET) ||
+-		in_egroup_p(AID_NET_RAW));
+-}
+-static inline int current_has_cap(struct net *net, int cap)
+-{
+-	if (cap == CAP_NET_RAW && in_egroup_p(AID_NET_RAW))
+-		return 1;
+-	return ns_capable(net->user_ns, cap);
+-}
+-# else
+-static inline int current_has_network(void)
+-{
+-	return 1;
+-}
+-static inline int current_has_cap(struct net *net, int cap)
+-{
+-	return ns_capable(net->user_ns, cap);
+-}
+-#endif
+-
+ /*
+  *	Create an inet socket.
+  */
+@@ -302,9 +279,6 @@ static int inet_create(struct net *net, struct socket *sock, int protocol,
+ 	if (protocol < 0 || protocol >= IPPROTO_MAX)
+ 		return -EINVAL;
+ 
+-	if (!current_has_network())
+-		return -EACCES;
+-
+ 	sock->state = SS_UNCONNECTED;
+ 
+ 	/* Look for the requested type/protocol pair. */
+@@ -354,7 +328,7 @@ static int inet_create(struct net *net, struct socket *sock, int protocol,
+ 
+ 	err = -EPERM;
+ 	if (sock->type == SOCK_RAW && !kern &&
+-	    !current_has_cap(net, CAP_NET_RAW))
++	    !ns_capable(net->user_ns, CAP_NET_RAW))
+ 		goto out_rcu_unlock;
+ 
+ 	sock->ops = answer->ops;
+@@ -520,7 +494,7 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
+ 	snum = ntohs(addr->sin_port);
+ 	err = -EACCES;
+ 	if (snum && snum < PROT_SOCK &&
+-	    !net_bind_service_capable(net->user_ns))
++	    !ns_capable(net->user_ns, CAP_NET_BIND_SERVICE))
+ 		goto out;
+ 
+ 	/*      We keep a pair of addresses. rcv_saddr is the one
+diff --git a/net/ipv6/af_inet6.c b/net/ipv6/af_inet6.c
+index b3c6bf1f3e78..b6504871fa84 100644
+--- a/net/ipv6/af_inet6.c
++++ b/net/ipv6/af_inet6.c
+@@ -131,29 +131,6 @@ static __inline__ struct ipv6_pinfo *inet6_sk_generic(struct sock *sk)
+ 	return (struct ipv6_pinfo *)(((u8 *)sk) + offset);
+ }
+ 
+-#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+-static inline int current_has_network(void)
+-{
+-	return (!current_euid() || in_egroup_p(AID_INET) ||
+-		in_egroup_p(AID_NET_RAW));
+-}
+-static inline int current_has_cap(struct net *net, int cap)
+-{
+-	if (cap == CAP_NET_RAW && in_egroup_p(AID_NET_RAW))
+-		return 1;
+-	return ns_capable(net->user_ns, cap);
+-}
+-# else
+-static inline int current_has_network(void)
+-{
+-	return 1;
+-}
+-static inline int current_has_cap(struct net *net, int cap)
+-{
+-	return ns_capable(net->user_ns, cap);
+-}
+-#endif
+-
+ static int inet6_create(struct net *net, struct socket *sock, int protocol,
+ 			int kern)
+ {
+@@ -169,9 +146,6 @@ static int inet6_create(struct net *net, struct socket *sock, int protocol,
+ 	if (protocol < 0 || protocol >= IPPROTO_MAX)
+ 		return -EINVAL;
+ 
+-	if (!current_has_network())
+-		return -EACCES;
+-
+ 	/* Look for the requested type/protocol pair. */
+ lookup_protocol:
+ 	err = -ESOCKTNOSUPPORT;
+@@ -219,7 +193,7 @@ static int inet6_create(struct net *net, struct socket *sock, int protocol,
+ 
+ 	err = -EPERM;
+ 	if (sock->type == SOCK_RAW && !kern &&
+-	    !current_has_cap(net, CAP_NET_RAW))
++	    !ns_capable(net->user_ns, CAP_NET_RAW))
+ 		goto out_rcu_unlock;
+ 
+ 	sock->ops = answer->ops;
+@@ -344,7 +318,7 @@ int inet6_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
+ 		return -EINVAL;
+ 
+ 	snum = ntohs(addr->sin6_port);
+-	if (snum && snum < PROT_SOCK && !net_bind_service_capable(net->user_ns))
++	if (snum && snum < PROT_SOCK && !ns_capable(net->user_ns, CAP_NET_BIND_SERVICE))
+ 		return -EACCES;
+ 
+ 	lock_sock(sk);
+-- 
+2.25.1
+
